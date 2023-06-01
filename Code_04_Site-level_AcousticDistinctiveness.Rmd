@@ -1,0 +1,877 @@
+---
+title: "Site-level acoustic distinctiveness"
+author: "Grace Smith-Vidaurre"
+# date: <center style="font-size:22px;font-style:normal;>`r format(Sys.time(), '%d %B, %Y')`</center>
+  <br />
+output: html_document
+---
+
+Purpose: Evaluate how site-level acoustic distinctiveness is associated with roost isolation, approximated by nearest neighbor distance as well as roost size.
+
+```{r eval = TRUE, echo = FALSE}
+
+knitr::opts_knit$set(root.dir = "/media/gsvidaurre/MYIOPSITTA/R/YNA_CulturalEvolutionAnalysis_2019/")
+
+```
+
+Clean environment and load packages.
+```{r echo = TRUE, eval = TRUE, message = FALSE}
+
+rm(list = ls())
+
+X <- c("warbleR", "ggplot2", "pbapply", "data.table", "tidyverse", "rgeos", "rgdal", "sp", "plotrix", "egg")
+
+invisible(lapply(X, library, character.only = TRUE))
+
+```
+
+```{r echo = TRUE, eval = TRUE}
+
+path <- "/media/gsvidaurre/MYIOPSITTA/R/YNA_CulturalEvolutionAnalysis_2019"
+
+gpath <- "/home/gsvidaurre/Desktop/MANUSCRIPTS/Prep/YellowNapedAmazon_CulturalEvolution/GRAPHICS_RESULTS"
+
+# Selection table: each row is a call
+ccs_st <- read.csv(file.path(path, "AmazonVocalCulture_SelectionTableMetadata_31May2023.csv"))
+# glimpse(ccs_st)
+
+cores <- parallel::detectCores() - 2
+cores
+
+seed <- 401
+
+# Initialize years
+yrs <- unique(ccs_st$Year)
+yrs
+
+```
+
+Read in SPCC and random forests (RF) matrices.
+```{r echo = TRUE, eval = TRUE}
+
+xc_mat <- readRDS(file.path(path, "xc_mat_allCalls.RDS"))
+rf_prox <- readRDS(file.path(path, "rf_unsup_prox.RDS"))
+
+# Arrange these matrices into a list to be used in analyses below by similarity method
+sim_meth <- c("SPCC", "RF")
+mat_list <- list(xc_mat, rf_prox)
+
+```
+
+Read in geographic coordinates of sites. Here, each row of the data frame is a unique site-year.
+```{r echo = TRUE, eval = TRUE}
+
+site_year_meta <- read.csv(file.path(path, "AmazonVocalCulture_SiteLevelMetadata_31May2023.csv"))
+glimpse(site_year_meta)
+
+```
+
+# Calculate geographic distances among sites in each sampling year
+
+Per year, find the 3 nearest neighbors per site, as well as distances among the given site and these neighbors.
+```{r echo = TRUE, eval = TRUE}
+
+# Iterate over years
+# Iterate over sites
+# Get names of 3 nearest neighbors and distances to each target site
+
+# Get an appropriate EPSG code for reprojection in meters in Costa Rica
+# Using EPSG 5367 for Costa Rica
+epsg <- rgdal::make_EPSG()
+epsg[grep("^5367$", epsg$code), ]
+proj_string <- epsg$prj4[grep("^5367$", epsg$code)]
+
+# y <- 1
+# i <- 2
+dists_df <- data.table::rbindlist(invisible(pblapply(1:length(yrs), function(y){
+  
+  # Per year, get the geographic coordinates and reproject
+  # Get site-years and calculate pairwise distance among them
+  
+  # Subset coordinates by year
+  tmp_df <- site_year_meta %>%
+    dplyr::filter(Year == yrs[y])
+  # glimpse(tmp_df)
+  
+  # Get sites for the given year
+  syrs <- tmp_df %>%
+    dplyr::mutate(
+      Site_Year = as.character(Site_Year)
+    ) %>%
+    pull(Site_Year) %>%
+    unique()
+  
+  # Make a matrix of geographic coordinates
+  mat <- as.matrix(data.frame(lon = tmp_df$Longitude, lat = tmp_df$Latitude))
+  # str(mat)
+
+  # Convert to Spatial Points object with unprojected coordinates
+  sp_pts <- SpatialPoints(mat, proj4string = CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+  # Reproject geographic coordinates using a Costa Rica coordinate system
+  sp_pts <- sp::spTransform(sp_pts, CRSobj = CRS(proj_string))
+  # proj4string(sp_pts) # Checking, looks good
+  
+  # Calculate pairwise distances among sites in the given year
+  # Returns distances in meters
+  pw_dists <- rgeos::gDistance(sp_pts, byid = TRUE)
+  # str(pw_dists)
+  
+  # Add site-year names as dimension names
+  dimnames(pw_dists) <- list(syrs, syrs)
+
+  # Convert distances to km and round to integers
+  pw_dists <- round(pw_dists/1000, digits = 2)
+  # head(pw_dists)
+  
+  # Per site in the given year, find the 3 nearest neighbors and distances to each
+  dists_df <- data.table::rbindlist(lapply(1:length(syrs), function(i){
+    
+    # Get distances between the current site and all others
+    tmp <- pw_dists[grep(syrs[i], dimnames(pw_dists)[[1]]), ]
+    
+    # Ignore distances of 0 (the site compared to itself)
+    tmp <- tmp[tmp != 0]
+      
+    # Order these distances so the smallest comes first
+    ord <- order(tmp, decreasing = FALSE)
+    
+    # Get the names of the 3 nearest neighbors
+    nn <- names(tmp[ord[1:3]])
+    
+    # Get the distances to the 3 nearest neighbors
+    nn_dists <- as.vector(tmp[ord[1:3]])
+    
+    # Get names of all other sites in the given year
+    oths <- names(tmp[ord[-c(1:3)]])
+    
+    # Get distances to all other sites in the given year
+    oth_dists <- as.vector(tmp[ord[-c(1:3)]])
+    
+    # Make a binary column to indicate nearest neighbor status or not (Y = Yes, nearest neighbor for the given site) 
+    nn_col <- c(rep("Y", length(nn)), rep("N", length(oths)))
+  
+    return(data.frame(year = yrs[y], site_year = syrs[i], compared2 = c(nn, oths), distance_km = c(nn_dists, oth_dists), nn_col = nn_col))
+    
+  }))
+  
+  return(dists_df)
+  
+})))
+
+glimpse(dists_df)
+
+```
+
+Summary statistics of nearest neighbor distances. Used 1994 results to split sites into Northern and Southern geographic regions here (so the Northern region includes calls with Nica and North call types). In 1994, CABU was the southernmost site where the North call type was recorded, and ZAPOL was the northernmost site where the South call type was recorded. This rule excludes GISA and JERO, which were the original bidialectal sites, and any other sites in between, but serves the purpose of providing summary statistics of nearest neighbor distances by region. 
+```{r echo = TRUE, eval = FALSE}
+
+nor <- site_year_meta %>%
+  dplyr::filter(Site_Code == "CABU" & Year == "1994") %>%
+  pull(Latitude)
+
+nor
+
+sou <- site_year_meta %>%
+  dplyr::filter(Site_Code == "zapol" & Year == "1994") %>%
+  pull(Latitude)
+
+sou
+
+# Three nearest neighbors, results are similar when split out across years
+dists_df %>%
+  inner_join(
+    site_year_meta %>%
+      dplyr::select(Site_Year, Latitude),
+    by = c("site_year" = "Site_Year")
+  ) %>%
+  dplyr::mutate(
+    historical_region = ifelse(Latitude >= nor, "Historic northern region", "Historic North/South dialect boundary"),
+    historical_region = ifelse(Latitude <= sou, "Historic southern region", historical_region)
+  ) %>%
+  dplyr::filter(nn_col == "Y") %>%
+  group_by(historical_region) %>%
+  dplyr::summarise(
+    mean_nn_dist = round(mean(distance_km), 2),
+    sd_nn_dist = round(sd(distance_km), 2)
+  ) %>%
+  kable()
+
+# All pairwise distances, results are similar when split out across years
+dists_df %>%
+  inner_join(
+    site_year_meta %>%
+      dplyr::select(Site_Year, Latitude),
+    by = c("site_year" = "Site_Year")
+  ) %>%
+  dplyr::mutate(
+    historical_region = ifelse(Latitude >= nor, "Historic northern region", "Historic North/South dialect boundary"),
+    historical_region = ifelse(Latitude <= sou, "Historic southern region", historical_region)
+  ) %>%
+  group_by(historical_region) %>%
+  dplyr::summarise(
+    mean_dist = round(mean(distance_km), 2),
+    sd_dist = round(sd(distance_km), 2)
+  ) %>%
+  kable()
+
+```
+
+# 1. Permutation analysis of acoustic similarity and nearest neighbor distance
+
+How does roost isolation influence the acoustic distinctiveness of sites compared to their 3 nearest neighbors? We expected that more isolated sites would be more acoustically distinctive from their nearest neighbors. For this analysis, we used the mean nearest neighbor distance of a given site as an indicator of roost isolation (we considered sites with greater mean nearest neighbor distances as more isolated sites). We calculated acoustic distinctiveness as the difference in mean acoustic similarity within a given site compared to the mean acoustic similarity among the given site and its 3 nearest neighbors. 
+
+We correlated this acoustic distinctiveness against the mean nearest neighbor distances, and then we performed a permutation analysis (in which we permuted the observed acoustic distinctiveness values as well as the mean nearest neighbor distances) to test the statistical significance of the observed correlation. We calculated a permuted p-value to reflect our expected outcome in the observed correlation. Since we expected to identify higher acoustic distinctiveness with higher nearest neighbor distances (e.g. a positive correlation), the permuted p-value reflects how many permuted correlation statistics were greater than or equal to the observed correlation statistic over the total number of permutations.
+
+Checking how call types are distributed among the 3 nearest neighbors for each target site. I did not restrict the permutation by call type.
+```{r echo = TRUE, eval = TRUE}
+
+# How many of the sites have nearest neighbors with a different call type? From visual classification
+glimpse(dists_df)
+
+syrs <- unique(as.character(dists_df$site_year))
+syrs
+
+pblapply(1:length(syrs), function(i){
+  
+  nn_tmp <- dists_df %>%
+    dplyr::filter(site_year == syrs[i]) %>%
+    dplyr::filter(nn_col == "Y") %>%
+    pull(compared2) %>%
+    as.character()
+  
+  ccs_st %>%
+    dplyr::filter(site_year %in% nn_tmp) %>%
+    pull(CallTypesVariants) %>%
+    unique() %>%
+    as.character()
+  
+})
+
+
+```
+
+Per year, return the observed mean SPCC and RF differences within each site and among 3 nearest neighbors, as well as the mean distance to these nearest neighbors.
+```{r echo = TRUE, eval = TRUE}
+
+# Iterate over similarity methods, years, and sites recorded per year
+# x <- 1 # testing
+# y <- 1
+# i <- 1
+obs_nn_df <- data.table::rbindlist(pblapply(1:length(sim_meth), function(x){
+  
+  tmp_res <- data.table::rbindlist(pblapply(1:length(yrs), function(y){
+    
+    # Subset the data frame of distances by the given year
+    tmp_df <- dists_df %>%
+      dplyr::filter(year == yrs[y]) %>%
+      droplevels()
+    
+    # Get sites for the given year
+    syrs <- tmp_df %>%
+      dplyr::mutate(
+        site_year = as.character(site_year)
+      ) %>%
+      pull(site_year) %>%
+      unique()
+    # syrs
+    
+    # Get the matrix for the given similarity method
+    tmp_mat <- mat_list[[x]]
+    # str(tmp_mat)
+    
+    # Iterate over each site and their 3 nearest neighbors to find the mean difference in SPCC similarity values within the given site and its 3 nearest neighbors
+    obs_df <- data.table::rbindlist(lapply(1:length(syrs), function(i){
+      
+      # Names of nearest neighbors for this site
+      nn <- tmp_df %>%
+        dplyr::filter(nn_col == "Y") %>%
+        dplyr::filter(site_year == syrs[i]) %>%
+        dplyr::mutate(compared2 = as.character(compared2)) %>%
+        pull(compared2)
+      # nn
+      
+      # Sound file names for the given site
+      wavs <- ccs_st %>%
+        dplyr::filter(grepl(paste("^", syrs[i], "$", sep = ""), site_year)) %>%
+        dplyr::mutate(sound.files = as.character(sound.files)) %>%
+        pull(sound.files)
+      # wavs
+      
+      # Sound file names for the nearest neighbors
+      wavs_nn <- ccs_st %>%
+        dplyr::filter(grepl(paste(paste("^", nn, "$", sep = ""), collapse = "|"), site_year)) %>%
+        dplyr::mutate(sound.files = as.character(sound.files)) %>%
+        pull(sound.files)
+      # wavs_nn
+      
+      # SPCC similarity within the given site
+      withn <- tmp_mat[grep(paste(paste("^", wavs, "$", sep = ""), collapse = "|"), dimnames(tmp_mat)[[1]]), grep(paste(paste("^", wavs, "$", sep = ""), collapse = "|"), dimnames(tmp_mat)[[2]])]
+      
+      # Extract the unique similarity values as the lower triangle of the matrix with no diagonal
+      withn <- withn[lower.tri(withn, diag = FALSE)]
+      # str(withn)
+      
+      # SPCC similarity among the given site and its 3 true nearest neighbors
+      # The result is not a symmetric matrix, so no need to take a lower triangle or drop a diagonal
+      amng <- tmp_mat[grep(paste(paste("^", wavs, "$", sep = ""), collapse = "|"), dimnames(tmp_mat)[[1]]), grep(paste(paste("^", wavs_nn, "$", sep = ""), collapse = "|"), dimnames(tmp_mat)[[2]])]
+      # head(amng)
+      
+      # Get the observed difference in mean SPCC values within the site and mean SPCC values among the site and its nearest neighbors
+      o_diff <- mean(withn) - mean(amng)
+      # o_diff
+      
+      # Get the mean observed nearest neighbor distance
+      o_dist <- tmp_df %>%
+        dplyr::filter(nn_col == "Y") %>%
+        dplyr::filter(site_year == syrs[i]) %>%
+        pull(distance_km) %>%
+        mean()
+      # o_dist
+      
+      return(data.frame(similarity_method = sim_meth[x], year = yrs[y], site_year = syrs[i], obs_sim_meth_diff = o_diff, obs_nn_dist = o_dist))
+      
+    }))
+    
+    return(obs_df)
+    
+  }))
+  
+  return(tmp_res)
+  
+}))
+
+glimpse(obs_nn_df)
+
+obs_nn_df %>%
+  group_by(year, similarity_method) %>%
+  dplyr::summarise(n = n())
+
+```
+
+Distribution of nearest neighbor distances?
+```{r echo = TRUE, eval = TRUE}
+
+max_km <- obs_nn_df %>%
+  pull(obs_nn_dist) %>%
+  max()
+
+max_km
+
+obs_nn_df %>%
+  ggplot(aes(x = obs_nn_dist)) +
+  geom_histogram(bins = 5, fill = "gray45") +
+  geom_vline(aes(xintercept = 25), color = "red", linetype = "dotted", linewidth = 0.75) +
+  facet_grid(~ year) +
+  theme_bw() +
+  xlab("Nearest neighbor distance (km)") +
+  ylab("Count") +
+  scale_x_continuous(breaks = seq(0, max_km, 10)) +
+  theme(
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 6),
+    panel.grid.major = element_line(size = 0.10),
+    panel.grid.minor = element_line(size = 0.10)
+  )
+
+# ggsave(file.path(path, "Distribution_NN_distances.tiff"), units = "in", width = 5, height = 4, dpi = 300)
+
+```
+
+How many sites across years have less than 2 birds recorded? These should be dropped in all permutation tests.
+```{r echo = TRUE, eval = TRUE}
+
+ccs_st %>%
+  group_by(site_year) %>%
+  dplyr::summarise(n_indivs = n_distinct(Bird_ID)) %>%
+  dplyr::filter(n_indivs < 2) %>%
+  dplyr::summarise(low_sites = length(n_indivs))
+
+# Get site-years with only a single bird recorded
+sites2drop <- ccs_st %>%
+  group_by(site_year) %>%
+  dplyr::summarise(n_indivs = n_distinct(Bird_ID)) %>%
+  dplyr::filter(n_indivs < 2) %>%
+  pull(site_year) %>%
+  as.character()
+
+sites2drop
+# [1] "PLGR-2005"
+
+obs_nn_df %>%
+  dplyr::filter(!site_year %in% sites2drop) %>% 
+  group_by(year, similarity_method) %>%
+  dplyr::summarise(n = n())
+
+```
+
+Per year, permute the observed SPCC differences and the nearest neighbor distances, perform the correlation using the continuous nearest neighbor distances, then return the permuted p-value. Make sure to drop the site-year identified above that was represented by a single bird only.
+```{r echo = TRUE, eval = TRUE}
+
+# How many permutations are possible? Many permutations are possible per year, so 1000 permutation iterations will be unlikely to yield repeated combinations
+factorial(nrow(obs_nn_df %>% 
+                 dplyr::filter(year == "1994") %>%
+                 dplyr::filter(!site_year %in% sites2drop)
+))
+
+factorial(nrow(obs_nn_df %>% 
+                 dplyr::filter(year == "2005")%>%
+                 dplyr::filter(!site_year %in% sites2drop)
+))
+
+factorial(nrow(obs_nn_df %>% 
+                 dplyr::filter(year == "2016")%>%
+                 dplyr::filter(!site_year %in% sites2drop)
+))
+
+iter <- 1000
+
+yrs <- unique(ccs_st$Year)
+yrs
+
+# Iterate over similarity methods and years 
+# x <- 1 # testing
+# y <- 1
+perm_df <- data.table::rbindlist(pblapply(1:length(sim_meth), function(x){
+  
+  tmp_res <- data.table::rbindlist(pblapply(1:length(yrs), function(y){
+    
+    obs_df <- obs_nn_df %>%
+      dplyr::filter(similarity_method == sim_meth[x]) %>%
+      dplyr::filter(year == yrs[y]) %>%
+      dplyr::filter(!site_year %in% sites2drop) %>%
+      droplevels()
+    
+    perm_fun <- function(df = obs_df, resp_var = "obs_sim_meth_diff", ind_var = "obs_nn_dist") {
+      perm_df <- df
+      perm_df[[resp_var]] <- sample(perm_df[[resp_var]])
+      perm_df[[ind_var]] <- sample(perm_df[[ind_var]])
+      return(perm_df)
+    }
+    
+    corr_fun <- function(df = df, resp_var = "obs_sim_meth_diff", ind_var = "obs_nn_dist") {
+      cor(df[[ind_var]], df[[resp_var]], method = "pearson")
+    }
+    
+    # Observed correlation
+    # Note that I put the dependent variable as x in cor() here, but switching dependent and independent variables between these arguments yields the same correlation statistic
+    obs_corr <- cor(obs_df$obs_sim_meth_diff, obs_df$obs_nn_dist, method = "pearson")
+    # obs_corr
+    
+    # Permuted correlations
+    set.seed(seed)
+    perm_corr <- replicate(iter, corr_fun(df = perm_fun()))
+    # str(perm_corr)
+    
+    # Get the p-value. This is a one-sided p-value, it means how often a positive correlation was observed that was equal to or greater than the observed correlation statistic 
+    perm_p_val <- length(perm_corr[perm_corr >= obs_corr])/iter
+    # perm_p_val
+    
+    perm_res_df <- data.frame(similarity_method = sim_meth[x], year = yrs[y], observed_correlation = round(obs_corr, 4), mean_permuted_correlation = round(mean(perm_corr), 4), perm_p_val = round(perm_p_val, 4), iterations = iter)
+    
+    return(perm_res_df)
+    
+  }))
+  
+  return(tmp_res)
+  
+}))
+
+perm_df %>%
+  write.csv(., file.path(gpath, "NearestNeighborContinuousPermutation.csv"), row.names = FALSE)
+
+```
+
+Adjust alpha of 0.05 by a Bonferroni correction to account for multiple tests.
+```{r echo = TRUE, eval = TRUE}
+
+perm_df <- read.csv(file.path(gpath, "NearestNeighborContinuousPermutation.csv"), header = TRUE)
+
+# Original alpha 
+alpha <- 0.05
+
+# Adjust alpha by a Bonferroni correction using the number of comparisons (one per year)
+adj_alpha <- round(alpha/nrow(perm_df), digits = 4)
+adj_alpha # 0.0083
+
+```
+
+```{r echo = TRUE, eval = TRUE}
+
+perm_df %>% 
+  dplyr::filter(similarity_method == "SPCC")
+
+```
+
+```{r echo = TRUE, eval = TRUE}
+
+perm_df %>% 
+  dplyr::filter(similarity_method == "RF")
+
+```
+
+In 2016, there was a higher correlation statistic indicating increasing nearest neighbor distance with increasing acoustic distinctiveness (compared to 1994 and 2005). This result held by each similarity method, but was not statistically significant under the corrected alpha. The random forests value was close to significance, and would have been significant under the original alpha value. Although not statistically significant, this result indicates that in 2016 (compared to earlier sampling years), sites with increasing distance to nearest neighbors were more acoustically distinctive from these neighbors (e.g. had higher similarity within the site compared to their nearest neighbors). 
+
+Make a visual to accompany this permutation test. This visual indicates that the correlation for 1994 may be insignificant due to sampling over greater nearest neighbor distances (> 40km), which were not present in 2005 and 2016.
+```{r echo = TRUE, eval = TRUE}
+
+# Create a dataframe with the Pearson's correlation statistics
+# Pearson's is the default for cor()
+cor_df <- perm_df %>%
+  dplyr::mutate(
+    observed_correlation = round(observed_correlation, 3),
+    observed_correlation = paste("Pearson's r = ", observed_correlation, sep = ""),
+    perm_p_val_txt = paste("p = ", perm_p_val, sep = ""),
+    # Add an asterisk if results were statistically significant after the Bonferroni correction
+    perm_p_val_txt = ifelse(perm_p_val <= adj_alpha, paste("*", perm_p_val_txt, sep = " "), perm_p_val_txt),
+    # Replace RF with Random forests
+    similarity_method = as.character(similarity_method),
+    similarity_method = ifelse(similarity_method == "RF", "Random forests", similarity_method),
+    similarity_method = factor(similarity_method, levels = c("Random forests", "SPCC"))
+  ) %>%
+  droplevels()
+
+cor_df
+
+# SPCC 
+obs_nn_df %>%
+  dplyr::filter(similarity_method == "SPCC") %>% 
+  dplyr::filter(!site_year %in% sites2drop) %>%
+  ggplot(aes(x = obs_nn_dist, y = obs_sim_meth_diff)) +
+  facet_grid(cols = vars(year), switch = "y") +
+  geom_point(size = 1, shape = 21, fill = alpha("black", 0.2), color = "black", stroke = 0.25) +
+  geom_smooth(method = lm, se = FALSE, color = "firebrick", linewidth = 0.25) +
+  geom_hline(aes(yintercept = 0), linetype = "dotted", linewidth = 0.25, color = "black") +
+  geom_text(data = cor_df %>% 
+              dplyr::filter(similarity_method == "SPCC"), aes(label = perm_p_val_txt, x = 40, y = 0.3), size = 1.65) +
+  geom_text(data = cor_df %>% 
+              dplyr::filter(similarity_method == "SPCC"), aes(label = observed_correlation, x = 40, y = 0.35), size = 1.65) +
+  scale_y_continuous(limits = c(-0.1, 0.4)) +
+  theme_bw() +
+  xlab("Mean nearest neighbor distance (km)") +
+  ylab("Site-level\n acoustic distinctiveness") +
+  theme(
+    axis.title = element_text(size = 9),
+    axis.text = element_text(size = 8),
+    strip.text = element_text(size = 9),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+  
+ggsave(file.path(gpath, "NearestNeighbor_Permutation_SPCC.tiff"), unit = "in", width = 3, height = 2, dpi = 300)
+
+### Random forests
+obs_nn_df %>%
+  dplyr::filter(similarity_method == "RF") %>% 
+  dplyr::mutate(
+    similarity_method = as.character(similarity_method),
+    similarity_method = ifelse(similarity_method == "RF", "Random forests", similarity_method)
+  ) %>%
+  dplyr::filter(!site_year %in% sites2drop) %>%
+  ggplot(aes(x = obs_nn_dist, y = obs_sim_meth_diff)) +
+  facet_grid(cols = vars(year), switch = "y") +
+  geom_point(size = 1, shape = 21, fill = alpha("black", 0.2), color = "black", stroke = 0.25) +
+  geom_smooth(method = lm, se = FALSE, color = "firebrick", linewidth = 0.25) +
+  geom_hline(aes(yintercept = 0), linetype = "dotted", linewidth = 0.25, color = "black") +
+  geom_text(data = cor_df %>% 
+              dplyr::filter(similarity_method == "Random forests"), aes(label = perm_p_val_txt, x = 40, y = 0.3), size = 1.65) +
+  geom_text(data = cor_df %>% 
+              dplyr::filter(similarity_method == "Random forests"), aes(label = observed_correlation, x = 40, y = 0.35), size = 1.65) +
+  scale_y_continuous(limits = c(-0.1, 0.4)) +
+  theme_bw() +
+  xlab("Mean nearest neighbor distance (km)") +
+  ylab("Mean difference in\n acoustic similarity") +
+  theme(
+    axis.title = element_text(size = 9),
+    axis.text = element_text(size = 8),
+    strip.text = element_text(size = 9),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+  
+ggsave(file.path(gpath, "NearestNeighbor_Permutation_RF.tiff"), unit = "in", width = 3, height = 2, dpi = 300)
+
+```
+
+# 2. Permutation analysis of acoustic similarity and roost size
+
+Roost size data.
+```{r echo = TRUE, eval = TRUE}
+
+roost_counts <- read.csv(file.path(path, "YNA_TemporalStability_CostaRica_RoostCounts.csv"))
+glimpse(roost_counts)
+
+# Filter by sites for which we have recordings (no NA in site code), sites for which we have counts and not just estimates
+# Dropped 11 rows
+roost_counts <- roost_counts %>%
+  dplyr::filter(!is.na(Site_Code)) %>%
+  dplyr::filter(!is.na(Count)) %>%
+  droplevels()
+glimpse(roost_counts)
+
+# How many sites have roost counts over 2 or 3 years?
+# 10 sites have counts over 2 years, 1 site has counts over all 3
+roost_counts %>%
+  group_by(Site_Code) %>%
+  summarise(n_years = n_distinct(Year)) %>%
+  dplyr::filter(n_years > 1)
+
+# Roost count sample sizes over years?
+roost_counts %>%
+  group_by(Year) %>%
+  summarise(n_sites = n_distinct(Site_Code)) 
+
+```
+
+```{r echo = TRUE, eval = TRUE}
+
+# Get site-years with only a single bird recorded
+sites2drop1 <- ccs_st %>%
+  group_by(site_year) %>%
+  dplyr::summarise(n_indivs = n_distinct(Bird_ID)) %>%
+  dplyr::filter(n_indivs < 2) %>%
+  pull(site_year) %>%
+  as.character()
+
+sites2drop1
+
+# Get site-years that have roost count data, but no recordings available
+sites2drop2 <- roost_counts %>%
+  dplyr::mutate(
+    Site_Year = gsub("_", "-", Site_Year)
+  ) %>%
+  dplyr::filter(!Site_Year %in% unique(ccs_st$site_year)) %>%
+  pull(Site_Year) %>%
+  as.character()
+
+sites2drop2
+
+sites2drop <- c(sites2drop1, sites2drop2)
+sites2drop # "PLGR-2005" "SARO-1994" "PEBL-2016"
+
+# Check sample sizes over time
+roost_counts %>%
+  dplyr::filter(!Site_Year %in% sites2drop) %>%
+  group_by(Year) %>%
+  summarise(n_sites = n_distinct(Site_Code)) 
+
+
+```
+
+With the following permutations, ask if SPCC and RF similarity decreases with increasing roost size or with larger decreases in roost size over time.
+
+Permutations for SPCC and RF similarity and roost size. Iterate over years, co correlations as before by permute only roost size. Return full permutation results and save these, need to change code above to do the same.
+
+Here, I think it makes the most sense to get SPCC and RF difference within-among sites by using the 3 nearest neighbors again. Join the roost size data with the data frame of observed nearest neighbor distances, which already contains the SPCC and RF difference within each site compared to its 3 nearest neighbors.
+```{r echo = TRUE, eval = FALSE}
+
+obs_roost_counts <- obs_nn_df %>%
+  dplyr::mutate(
+    site_year = as.character(site_year)
+  ) %>%
+  inner_join(
+    roost_counts %>%
+      dplyr::mutate(
+        Site_Year = as.character(Site_Year)
+      ) %>%
+      dplyr::rename(site_year = Site_Year) %>%
+      dplyr::select(site_year, Count),
+    by = "site_year"
+  )
+
+glimpse(obs_roost_counts)
+
+# No NAs present in roost count column
+length(which(is.na(obs_roost_counts$Count)))
+
+obs_roost_counts %>%
+  dplyr::filter(!site_year %in% sites2drop) %>%
+  group_by(year, similarity_method) %>%
+  dplyr::summarise(n = n())
+
+```
+
+Drop the 1994 comparison, since only 2 sites remain after filtering for both acoustic and roost count data.
+
+Permute the observed acoustic distinctiveness and the roost counts. Get the p-value, calculate this as the number of times the permuted correlation was less than or equal to the observed, since we think that the difference in SPCC similarity will decrease with increasing roost size (e.g. with increasing roost size, sites will be more similar to their nearest neighbors)
+```{r echo = TRUE, eval = FALSE}
+
+# How many permutations are possible? Many permutations are possible per year, except for 1994, given that there are only 2 sites. Will combine 199 and 2005 data, then 1000 permutation iterations will be unlikely to yield repeated combinations
+factorial(nrow(obs_roost_counts %>% 
+  dplyr::filter(year == "2005")%>%
+  dplyr::filter(!site_year %in% sites2drop)
+  ))
+
+factorial(nrow(obs_roost_counts %>% 
+  dplyr::filter(year == "2016")%>%
+  dplyr::filter(!site_year %in% sites2drop)
+  ))
+
+iter <- 1000
+
+# Drop 1994 due to low sample sizes
+yrs <- c("2005", "2016")
+
+# Iterate over similarity methods and years
+# x <- 1 # testing
+# y <- 1
+perm_rc_df <- data.table::rbindlist(pblapply(1:length(sim_meth), function(x){
+  
+  tmp_res <- data.table::rbindlist(pblapply(1:length(yrs), function(y){
+    
+    obs_df <- obs_roost_counts %>%
+      dplyr::filter(similarity_method == sim_meth[x]) %>%
+      dplyr::filter(grepl(yrs[y], year)) %>%
+      dplyr::filter(!site_year %in% sites2drop) %>%
+      droplevels()
+    
+    perm_fun <- function(df = obs_df, resp_var = "obs_sim_meth_diff", ind_var = "Count") {
+      perm_df <- df
+      perm_df[[resp_var]] <- sample(perm_df[[resp_var]])
+      perm_df[[ind_var]] <- sample(perm_df[[ind_var]])
+      return(perm_df)
+    }
+    
+    corr_fun <- function(df = df, resp_var = "obs_sim_meth_diff", ind_var = "Count") {
+      cor(df[[ind_var]], df[[resp_var]])
+    }
+    
+    # Observed correlation
+    obs_corr <- cor(obs_df$obs_sim_meth_diff, obs_df$Count, method = "pearson")
+    # obs_corr
+    
+    # Permuted correlations
+    set.seed(seed)
+    perm_corr <- replicate(iter, corr_fun(df = perm_fun()))
+    # str(perm_corr)
+    
+    # Get the p-value, calculate this as the number of times the permuted correlation was less than or equal to the observed, since we think that the difference in SPCC similarity will decrease with increasing roost size (e.g. with increasing roost size, sites will be more similar to their nearest neighbors)
+    perm_p_val <- length(perm_corr[perm_corr <= obs_corr])/iter
+    # perm_p_val
+    
+    perm_res_df <- data.frame(similarity_method = sim_meth[x], year = yrs[y], observed_correlation = obs_corr, mean_permuted_correlation = mean(perm_corr), perm_p_val = perm_p_val)
+    
+    return(perm_res_df)
+    
+  }))
+  
+  return(tmp_res)
+  
+}))
+
+perm_rc_df %>%
+  write.csv(., file.path(gpath, "RoostCountPermutation.csv"), row.names = FALSE)
+
+```
+
+Adjust alpha of 0.05 by a Bonferroni correction to account for multiple tests.
+```{r echo = TRUE, eval = FALSE}
+
+perm_rc_df <- read.csv(file.path(gpath, "RoostCountPermutation.csv"), header = TRUE)
+
+# Original alpha 
+alpha <- 0.05
+
+# Adjust alpha by a Bonferroni correction using the number of comparisons (one per year)
+adj_alpha <- round(alpha/nrow(perm_rc_df), digits = 4)
+adj_alpha # 0.0125
+
+```
+
+```{r echo = TRUE, eval = TRUE}
+
+perm_rc_df %>% 
+  dplyr::filter(similarity_method == "SPCC")
+
+```
+
+```{r echo = TRUE, eval = TRUE}
+
+perm_rc_df %>% 
+  dplyr::filter(similarity_method == "RF")
+
+```
+
+By both SPCC and random forests there appears to be a stronger negative correlation between acoustic distinctiveness and roost size (e.. larger roosts are less acoustically distinctive from their 3 nearest neighbors) in 2005 more than 2016. This result was not statistically significant. 
+
+Make a visual.
+```{r echo = TRUE, eval = TRUE}
+
+# Create a dataframe with the Pearson's correlation statistics
+cor_df <- perm_rc_df %>%
+  dplyr::mutate(
+    year = as.character(year)
+  ) %>%
+  dplyr::mutate(
+    observed_correlation = round(observed_correlation, 3),
+    observed_correlation = paste("Pearson's r = ", observed_correlation, sep = ""),
+    perm_p_val_txt = paste("p = ", perm_p_val, sep = ""),
+    # Add an asterisk if results were statistically significant after the Bonferroni correction
+    perm_p_val_txt = ifelse(perm_p_val <= adj_alpha, paste("*", perm_p_val_txt, sep = " "), perm_p_val_txt)
+  )
+
+cor_df
+
+### SPCC
+obs_roost_counts %>%
+  dplyr::filter(year != "1994") %>% 
+  dplyr::filter(!site_year %in% sites2drop) %>%
+  dplyr::filter(similarity_method == "SPCC") %>% 
+  dplyr::mutate(
+    year = factor(as.character(year))
+  ) %>%
+  ggplot(aes(x = Count, y = obs_sim_meth_diff)) +
+  facet_grid(rows = vars(similarity_method), cols = vars(year), switch = "y") +
+  geom_point(size = 1, shape = 21, fill = alpha("black", 0.2), color = "black", stroke = 0.25) +
+  geom_smooth(method = lm, se = FALSE, color = "firebrick", linewidth = 0.25) +
+  geom_hline(aes(yintercept = 0), linetype = "dotted", linewidth = 0.25, color = "black") +
+  geom_text(data = cor_df %>% 
+              dplyr::filter(similarity_method == "SPCC"), aes(label = perm_p_val_txt, x = 70, y = 0.3), size = 2) +
+  geom_text(data = cor_df %>% 
+              dplyr::filter(similarity_method == "SPCC"), aes(label = observed_correlation, x = 70, y = 0.35), size = 2) +
+  scale_y_continuous(limits = c(-0.1, 0.4)) +
+  theme_bw() +
+  xlab("Roost size (number of birds counted)") +
+  ylab("Site-level\n acoustic distinctiveness") +
+  theme(
+    axis.title = element_text(size = 9),
+    axis.text = element_text(size = 7),
+    strip.text = element_text(size = 9),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+  
+ggsave(file.path(gpath, "RoostCount_Permutation_SPCC.tiff"), unit = "in", width = 3.75, height = 2, dpi = 300)
+
+### Random forests
+obs_roost_counts %>%
+  dplyr::filter(year != "1994") %>% 
+  dplyr::filter(!site_year %in% sites2drop) %>%
+  dplyr::filter(similarity_method == "RF") %>% 
+  dplyr::mutate(
+    year = factor(as.character(year))
+  ) %>%
+  ggplot(aes(x = Count, y = obs_sim_meth_diff)) +
+  facet_grid(rows = vars(similarity_method), cols = vars(year), switch = "y") +
+  geom_point(size = 1, shape = 21, fill = alpha("black", 0.2), color = "black", stroke = 0.25) +
+  geom_smooth(method = lm, se = FALSE, color = "firebrick", linewidth = 0.25) +
+  geom_hline(aes(yintercept = 0), linetype = "dotted", linewidth = 0.25, color = "black") +
+  geom_text(data = cor_df %>% 
+              dplyr::filter(similarity_method == "RF"), aes(label = perm_p_val_txt, x = 70, y = 0.3), size = 2) +
+  geom_text(data = cor_df %>% 
+              dplyr::filter(similarity_method == "RF"), aes(label = observed_correlation, x = 70, y = 0.35), size = 2) +
+  scale_y_continuous(limits = c(-0.1, 0.4)) +
+  theme_bw() +
+  xlab("Roost size (number of birds counted)") +
+  ylab("Mean difference in\n acoustic similarity") +
+  theme(
+    axis.title = element_text(size = 9),
+    axis.text = element_text(size = 7),
+    strip.text = element_text(size = 9),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+  
+ggsave(file.path(gpath, "RoostCount_Permutation_RF.tiff"), unit = "in", width = 3.75, height = 2, dpi = 300)
+
+```

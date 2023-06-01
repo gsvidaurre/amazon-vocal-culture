@@ -1,0 +1,1035 @@
+---
+title: "Emerging Acoustic Variants"
+author: "Grace Smith-Vidaurre"
+date: <center style="font-size:22px;font-style:normal;>`r format(Sys.time(), '%d %B, %Y')`</center>
+  <br />
+output: 
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+---
+
+Purpose: Assess whether new call types identified in 2016 can be considered new or emerging forms of acoustic variation with respect to historical dialects recorded over time.
+
+```{r eval = TRUE, echo = FALSE}
+
+knitr::opts_knit$set(root.dir = "/media/gsvidaurre/MYIOPSITTA/R/YNA_CulturalEvolutionAnalysis_2019/")
+
+```
+
+Clean environment and load packages.
+```{r echo = TRUE, eval = TRUE, message = FALSE}
+
+# clean global environment
+rm(list = ls())
+
+X <- c("plyr", "dplyr", "warbleR", "ggplot2", "pbapply", "parallel", "data.table", "tidyverse", "mclust", "scales", "egg", "ggplotify", "grid", "rgeos", "rgdal", "sp", "tidyselect", "Rmisc", "ks", "sp", "sf", "smoothr", "rgeos", "raster", "ggpattern", "nngeo")
+
+invisible(lapply(X, library, character.only = TRUE))
+
+```
+
+```{r echo = TRUE, eval = TRUE}
+
+path <- "/media/gsvidaurre/MYIOPSITTA/R/YNA_CulturalEvolutionAnalysis_2019"
+
+gpath <- "/home/gsvidaurre/Desktop/MANUSCRIPTS/Prep/YellowNapedAmazon_CulturalEvolution/GRAPHICS_RESULTS"
+
+# Selection table: each row is a call
+ccs_st <- read.csv(file.path(path, "AmazonVocalCulture_SelectionTableMetadata_31May2023.csv"))
+# glimpse(ccs_st)
+
+# Site-level metadata: each row is a site
+site_year_meta <- read.csv(file.path(path, "AmazonVocalCulture_SiteLevelMetadata_31May2023.csv"))
+glimpse(site_year_meta)
+
+cores <- parallel::detectCores() - 2
+cores
+
+seed <- 401
+
+# Initialize years
+yrs <- unique(ccs_st$Year)
+yrs
+
+# Read in SPCC and random forests MDS coordinates
+mds_spcc_df <- read.csv(file.path(path, "MDS_SPCC_coordinates.csv"))
+glimpse(mds_spcc_df)
+
+mds_rf_df <- read.csv(file.path(path, "MDS_RandomForests_coordinates.csv"))
+glimpse(mds_rf_df)
+
+# Load function to calculate polygons derived from 95% kernel density estimates in acoustic space
+source(file.path("/home/gsvidaurre/Desktop/GitHub_repos/temporal-stability-amazons/Code/Functions", "acousticSpace95KDEPolygons.R"))
+
+# Load functions to calculate acoustic change index from the 95% kernel density estimate polygons and make visuals
+source(file.path("/home/gsvidaurre/Desktop/GitHub_repos/temporal-stability-amazons/Code/Functions", "calculate_acousticDistinctivenessIndex.R"))
+
+source(file.path("/home/gsvidaurre/Desktop/GitHub_repos/temporal-stability-amazons/Code/Functions", "plot_acousticSpace_temporalComparisons.R"))
+
+```
+
+# 1. Acoustic distinctiveness among 2016 variants and 1994/2005 historical call types
+
+Control for variation in sample size and call quality again. This analysis will address whether each new 2016 variant that represents an incipient call type that was rare in previous years, or if structurally similar calls were captured in previous years.
+
+Prepare the SPCC and random forests MDS coordinates.
+```{r echo = TRUE, eval = FALSE}
+
+### SPCC
+unique(mds_spcc_df$Call_Type)
+
+mds_spcc_df2 <- mds_spcc_df %>% 
+  # Merge the 1994 and 2005 Nica variants into a single Nica call type
+  dplyr::mutate(
+    Call_Type = ifelse(grepl("Nica", Call_Type), gsub("-A|-B", "", Call_Type), Call_Type)
+  ) %>% 
+  # Order the Call_Type column
+  dplyr::mutate(
+    Call_Type = factor(Call_Type, levels = c("North", "South", "Nica", "North-A", "South-A", "South-B", "South-C"))
+  ) %>%
+  # Make a new call type - year column
+  dplyr::mutate(
+    Call_Type_Year = paste(Call_Type, Year, sep = "_"),
+    Call_Type_Year = factor(Call_Type_Year)
+  ) %>%
+  # Add back useful metadata about call quality
+  dplyr::inner_join(
+    ccs_st %>%
+      dplyr::select(sound.files, Overlapping_Signal, Visual_Quality_Score),
+    by = "sound.files"
+  ) %>% 
+  dplyr::select(sound.files, Year, new_site_code, Call_Type, Call_Type_Year, X, Y, Overlapping_Signal, Visual_Quality_Score)
+
+glimpse(mds_spcc_df2)
+unique(mds_spcc_df2$Call_Type)
+
+### Random forests
+unique(mds_rf_df$Call_Type)
+
+mds_rf_df2 <- mds_rf_df %>% 
+  # Merge the 1994 and 2005 Nica variants into a single Nica call type
+  dplyr::mutate(
+    Call_Type = ifelse(grepl("Nica", Call_Type), gsub("-A|-B", "", Call_Type), Call_Type)
+  ) %>% 
+  # Order the Call_Type column
+  dplyr::mutate(
+    Call_Type = factor(Call_Type, levels = c("North", "South", "Nica", "North-A", "South-A", "South-B", "South-C"))
+  ) %>%
+  # Make a new call type - year column
+  dplyr::mutate(
+    Call_Type_Year = paste(Call_Type, Year, sep = "_"),
+    Call_Type_Year = factor(Call_Type_Year)
+  ) %>%
+  dplyr::select(sound.files, Year, new_site_code, Call_Type, Call_Type_Year, X, Y) %>% 
+  # Add back useful metadata about call quality
+  dplyr::inner_join(
+    ccs_st %>%
+      dplyr::select(sound.files, Overlapping_Signal, Visual_Quality_Score),
+    by = "sound.files"
+  ) %>% 
+  dplyr::select(sound.files, Year, new_site_code, Call_Type, Call_Type_Year, X, Y, Overlapping_Signal, Visual_Quality_Score)
+
+glimpse(mds_rf_df2)
+unique(mds_rf_df2$Call_Type)
+
+```
+
+## Control for sample size over time
+
+Here, the comparison needs to be each 2016 variant compared against each historical call type in all 3 sampling years (North, South, Nica variants)
+
+Arguments for the acoustic distinctiveness calculations and figures.
+```{r}
+
+# Call types for the comparison, listed by each 2016 variant
+call_types <- list(
+  # North-A
+  c( # 2016 variant
+    mds_spcc_df2 %>%
+      dplyr::filter(Year == "2016" & Call_Type == "North-A") %>%
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character(),
+    # Historical call types
+    mds_spcc_df2 %>%
+      dplyr::filter(grepl("^North$|^South$|^Nica$", Call_Type)) %>% 
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character()
+  ), 
+  # South-A
+  c( # 2016 variant
+    mds_spcc_df2 %>%
+      dplyr::filter(Year == "2016" & Call_Type == "South-A") %>%
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character(),
+    # Historical call types
+    mds_spcc_df2 %>%
+      dplyr::filter(grepl("^North$|^South$|^Nica$", Call_Type)) %>% 
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character()
+  ),
+  # South-B
+  c( # 2016 variant
+    mds_spcc_df2 %>%
+      dplyr::filter(Year == "2016" & Call_Type == "South-B") %>%
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character(),
+    # Historical call types
+    mds_spcc_df2 %>%
+      dplyr::filter(grepl("^North$|^South$|^Nica$", Call_Type)) %>% 
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character()
+  ),
+  # South-C
+  c( # 2016 variant
+    mds_spcc_df2 %>%
+      dplyr::filter(Year == "2016" & Call_Type == "South-C") %>%
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character(),
+    # Historical call types
+    mds_spcc_df2 %>%
+      dplyr::filter(grepl("^North$|^South$|^Nica$", Call_Type)) %>% 
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character()
+  )
+)
+
+call_types
+
+variants <- c("North-A_2016", "South-A_2016", "South-B_2016", "South-C_2016")
+variants
+
+names(call_types) <- variants
+
+# x <- 1
+variant_callType_comparisons <- lapply(1:length(call_types), function(x){
+  
+  tmp <- expand.grid(rep(call_types[x], 2)) 
+  
+  names(tmp) <- c("Var1", "Var2")
+  
+  tmp <- tmp %>% 
+    dplyr::mutate(
+      Var1 = as.character(Var1),
+      Var2 = as.character(Var2)
+    )
+    # Retain only the comparisons that include a 2016 variant
+    # dplyr::filter(Var2 %in% variants)
+  
+  return(tmp)
+  
+})
+
+variant_callType_comparisons
+
+group_col <- "Call_Type_Year"
+
+```
+
+## Control for sample size, no quality filter
+
+Use random sampling to control for variation in sample size for the comparison of acoustic distinctiveness of call types sampled in each year (no filtering by call quality).
+
+What is the smallest sample size for any year and call type? 25 calls for South-B in 2016.
+```{r}
+
+min_calls <- mds_spcc_df2 %>% 
+  dplyr::group_by(Call_Type, Year) %>% 
+  dplyr::summarise(n = n()) %>% 
+  ungroup() %>% 
+  dplyr::arrange(-desc(n)) %>% 
+  slice(1) %>% 
+  # glimpse()
+  pull(n)
+
+min_calls
+
+```
+
+Randomly sample this number of calls from each of call type in each sampling year. Do not filter by call quality.
+```{r}
+
+# Create a data frame of the number of calls to be sampled for each call type and year
+call_samp_n <- mds_spcc_df2 %>%
+  distinct(Call_Type, Year) %>%
+  dplyr::mutate(min_calls = min_calls)
+
+glimpse(call_samp_n)
+
+# Perform random sampling of calls per site per year without replacement. Note that when the number of calls to be randomly sampled is the same as calls in the given year, then all calls will be returned without random sampling 
+
+set.seed(seed)
+
+mds_spcc_rs_df <- mds_spcc_df2 %>%
+  group_by(Call_Type, Year) %>%
+  # glimpse()
+  nest() %>%
+  ungroup() %>%
+  inner_join(
+    call_samp_n,
+    by = c("Call_Type", "Year")
+  ) %>%
+  # glimpse()
+  dplyr::mutate(
+    rsamp_call = purrr::map2(data, min_calls, sample_n, replace = FALSE)
+  ) %>%
+  dplyr::select(-data) %>%
+  unnest(rsamp_call) %>%
+  dplyr::select(-c(min_calls))
+
+# 300 total calls were retained using this sampling scheme
+glimpse(mds_spcc_rs_df)
+
+# Looks good, the same number of calls per call type were obtained across years
+mds_spcc_rs_df %>%
+  group_by(Call_Type, Year) %>%
+  dplyr::summarise(n = n()) %>%
+  pivot_wider(
+    names_from = "Year",
+    values_from = "n"
+  )
+
+write.csv(mds_spcc_rs_df, file.path(gpath, "randomSampling_allCallTypes_SPCC.csv"), row.names = FALSE)
+
+# Then select the same calls that were randomly sampled for the RF MDS coordinates
+mds_rf_rs_df <- mds_rf_df2 %>% 
+  dplyr::filter(sound.files %in% mds_spcc_rs_df$sound.files)
+
+# Checking, looks good
+all(mds_rf_rs_df$sound.files %in% mds_spcc_rs_df$sound.files)
+all(mds_spcc_rs_df$sound.files %in% mds_rf_rs_df$sound.files)
+
+write.csv(mds_rf_rs_df, file.path(gpath, "randomSampling_allCallTypes_RF.csv"), row.names = FALSE)
+
+```
+
+Calculate acoustic distinctiveness using both similarity methods.
+```{r echo = TRUE, eval = FALSE}
+
+### SPCC
+
+mds_spcc_rs_df <- read.csv(file.path(gpath, "randomSampling_allCallTypes_SPCC.csv")) %>% 
+  # The grouping column must be a factor
+  dplyr::mutate(
+    !!group_col := factor(!!sym(group_col))
+  )
+glimpse(mds_spcc_rs_df)
+
+# Get the list of spatial polygons representing the 95% density contour of each call type per year in acoustic space
+# Each polys object is a list that contains 1 polygon per call type in each year
+spcc_rs_95polys <- get95polys(df = mds_spcc_rs_df, X_col = "X", Y_col = "Y", group_col = group_col)
+names(spcc_rs_95polys)
+
+# Calculate the acoustic distinctiveness index for each pair of call types that should be compared in each sampling year
+v_aci_spcc_rs <- AcousticDistinctivenessIndex(polys = spcc_rs_95polys, comparisons_list = variant_callType_comparisons, groups = variants, type = "variants")
+glimpse(v_aci_spcc_rs)
+
+### Random forests
+
+mds_rf_rs_df <- read.csv(file.path(gpath, "randomSampling_allCallTypes_RF.csv")) %>% 
+  # The grouping column must be a factor
+  dplyr::mutate(
+    !!group_col := factor(!!sym(group_col))
+  )
+glimpse(mds_rf_rs_df)
+
+# Get the list of spatial polygons representing the 95% density contour of each call type per year in acoustic space
+# Each polys object is a list that contains 1 polygon per call type in each year
+rf_rs_95polys <- get95polys(df = mds_rf_rs_df, X_col = "X", Y_col = "Y", group_col = group_col)
+
+# Calculate the acoustic distinctiveness index for each pair of call types that should be compared in each sampling year
+# Some polygons have no overlap at all in random forests acoustic space, which throws the error and warning:
+# "Error in .local(obj, ...) : 
+  # cannot derive coordinates from non-numeric matrix
+# In addition: Warning message:
+# [intersect] no intersection "
+# I added a try statement to the function that sets the intersection area to 0 when there is no overlap between polygons (after doublechecking that there was no overlap visually)
+v_aci_rf_rs <- AcousticDistinctivenessIndex(polys = rf_rs_95polys, comparisons_list = variant_callType_comparisons, groups = variants, type = "variants")
+glimpse(v_aci_rf_rs)
+
+```
+
+## Control for sample size, plus quality filter
+
+Use the same random sampling as above for the comparison of acoustic distinctiveness of call types sampled in each year (with the filtering by call quality).
+
+What is the smallest sample size for any year and call type after filtering for high quality calls? 15 calls for South-B in 2016.
+```{r}
+
+unique(mds_spcc_df2$Call_Type_Year)
+
+min_calls <- mds_spcc_df2 %>% 
+  dplyr::filter(Overlapping_Signal == "N", Visual_Quality_Score == "H") %>% 
+  dplyr::group_by(Call_Type, Year) %>% 
+  dplyr::summarise(n = n()) %>% 
+  ungroup() %>% 
+  dplyr::arrange(-desc(n)) %>% 
+  slice(1) %>%
+  pull(n)
+
+min_calls
+
+```
+
+Randomly sample this number of calls from each of the call types in each sampling year after selecting only high quality calls.
+```{r}
+
+# Create a data frame of the number of calls to be sampled for each call type and year
+call_samp_n <- mds_spcc_df2 %>%
+  dplyr::filter(Overlapping_Signal == "N", Visual_Quality_Score == "H") %>% 
+  distinct(Call_Type, Year) %>%
+  dplyr::mutate(min_calls = min_calls)
+
+glimpse(call_samp_n)
+
+# Perform random sampling of calls per site per year without replacement. Note that when the number of calls to be randomly sampled is the same as calls in the given year, then all calls will be returned without random sampling 
+
+set.seed(seed)
+
+mds_spcc_rs_df_hQ <- mds_spcc_df2 %>%
+  dplyr::filter(Overlapping_Signal == "N", Visual_Quality_Score == "H") %>% 
+  group_by(Call_Type, Year) %>%
+  nest() %>%
+  ungroup() %>%
+  inner_join(
+    call_samp_n,
+    by = c("Call_Type", "Year")
+  ) %>%
+  dplyr::mutate(
+    rsamp_call = purrr::map2(data, min_calls, sample_n, replace = FALSE)
+  ) %>%
+  dplyr::select(-data) %>%
+  unnest(rsamp_call) %>%
+  dplyr::select(-c(min_calls))
+
+# 180 total calls were retained using this sampling scheme
+glimpse(mds_spcc_rs_df_hQ)
+
+# Looks good, the same number of calls per call type were obtained across years (when that call type was identified using visual classification)
+mds_spcc_rs_df_hQ %>%
+  group_by(Call_Type, Year) %>%
+  dplyr::summarise(n = n()) %>%
+  pivot_wider(
+    names_from = "Year",
+    values_from = "n"
+  )
+
+write.csv(mds_spcc_rs_df_hQ, file.path(gpath, "randomSampling_allCallTypes_SPCC_hQ.csv"), row.names = FALSE)
+
+# Then select the same calls that were randomly sampled for the RF MDS coordinates
+mds_rf_rs_df_hQ <- mds_rf_df2 %>% 
+  dplyr::filter(sound.files %in% mds_spcc_rs_df_hQ$sound.files)
+
+# Checking, looks good
+all(mds_rf_rs_df_hQ$sound.files %in% mds_spcc_rs_df_hQ$sound.files)
+all(mds_spcc_rs_df_hQ$sound.files %in% mds_rf_rs_df_hQ$sound.files)
+
+write.csv(mds_rf_rs_df_hQ, file.path(gpath, "randomSampling_allCallTypes_RF_hQ.csv"), row.names = FALSE)
+
+```
+
+Arguments for the acoustic distinctiveness calculations and figures.
+```{r}
+
+# Call types for the comparison, listed by each 2016 variant
+call_types <- list(
+  # North-A
+  c( # 2016 variant
+    mds_spcc_df2 %>%
+      dplyr::filter(Year == "2016" & Call_Type == "North-A") %>%
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character(),
+    # Historical call types
+    mds_spcc_df2 %>%
+      dplyr::filter(grepl("^North$|^South$|^Nica$", Call_Type)) %>% 
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character()
+  ), 
+  # South-A
+  c( # 2016 variant
+    mds_spcc_df2 %>%
+      dplyr::filter(Year == "2016" & Call_Type == "South-A") %>%
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character(),
+    # Historical call types
+    mds_spcc_df2 %>%
+      dplyr::filter(grepl("^North$|^South$|^Nica$", Call_Type)) %>% 
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character()
+  ),
+  # South-B
+  c( # 2016 variant
+    mds_spcc_df2 %>%
+      dplyr::filter(Year == "2016" & Call_Type == "South-B") %>%
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character(),
+    # Historical call types
+    mds_spcc_df2 %>%
+      dplyr::filter(grepl("^North$|^South$|^Nica$", Call_Type)) %>% 
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character()
+  ),
+  # South-C
+  c( # 2016 variant
+    mds_spcc_df2 %>%
+      dplyr::filter(Year == "2016" & Call_Type == "South-C") %>%
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character(),
+    # Historical call types
+    mds_spcc_df2 %>%
+      dplyr::filter(grepl("^North$|^South$|^Nica$", Call_Type)) %>% 
+      pull(Call_Type_Year) %>%
+      unique() %>%
+      as.character()
+  )
+)
+
+call_types
+
+variants <- c("North-A_2016", "South-A_2016", "South-B_2016", "South-C_2016")
+variants
+
+names(call_types) <- variants
+
+# x <- 1
+variant_callType_comparisons <- lapply(1:length(call_types), function(x){
+  
+  tmp <- expand.grid(rep(call_types[x], 2)) 
+  
+  names(tmp) <- c("Var1", "Var2")
+  
+  tmp <- tmp %>% 
+    dplyr::mutate(
+      Var1 = as.character(Var1),
+      Var2 = as.character(Var2)
+    )
+  
+  return(tmp)
+  
+})
+
+variant_callType_comparisons
+
+group_col <- "Call_Type_Year"
+
+```
+
+Calculate acoustic distinctiveness using both similarity methods.
+```{r echo = TRUE, eval = FALSE}
+
+### SPCC
+
+mds_spcc_rs_df_hQ <- read.csv(file.path(gpath, "randomSampling_allCallTypes_SPCC_hQ.csv")) %>% 
+  # The grouping column must be a factor
+  dplyr::mutate(
+    !!group_col := factor(!!sym(group_col))
+  )
+glimpse(mds_spcc_rs_df_hQ)
+
+# Get the list of spatial polygons representing the 95% density contour of each call type per year in acoustic space
+# Each polys object is a list that contains 1 polygon per call type in each year
+spcc_rs_95polys_hQ <- get95polys(df = mds_spcc_rs_df_hQ, X_col = "X", Y_col = "Y", group_col = group_col)
+names(spcc_rs_95polys_hQ)
+
+# Calculate the acoustic distinctiveness index for each pair of call types that should be compared in each sampling year
+v_aci_spcc_rs_hQ <- AcousticDistinctivenessIndex(polys = spcc_rs_95polys_hQ, comparisons_list = variant_callType_comparisons, groups = variants, type = "variants")
+glimpse(v_aci_spcc_rs_hQ)
+
+### Random forests
+
+mds_rf_rs_df_hQ <- read.csv(file.path(gpath, "randomSampling_allCallTypes_RF_hQ.csv")) %>% 
+  # The grouping column must be a factor
+  dplyr::mutate(
+    !!group_col := factor(!!sym(group_col))
+  )
+glimpse(mds_rf_rs_df_hQ)
+
+# Get the list of spatial polygons representing the 95% density contour of each call type per year in acoustic space
+# Each polys object is a list that contains 1 polygon per call type in each year
+rf_rs_95polys_hQ <- get95polys(df = mds_rf_rs_df_hQ, X_col = "X", Y_col = "Y", group_col = group_col)
+
+# Calculate the acoustic distinctiveness index for each pair of call types that should be compared in each sampling year
+# As above, errors and warnings are thrown when there is no intersection area, but the function catches this and sets the intersection area to 0
+v_aci_rf_rs_hQ <- AcousticDistinctivenessIndex(polys = rf_rs_95polys_hQ, comparisons_list = variant_callType_comparisons, groups = variants, type = "variants")
+glimpse(v_aci_rf_rs_hQ)
+
+```
+
+Combine acoustic distinctiveness results across these analyses.
+```{r echo = TRUE, eval = FALSE}
+
+# Randomly subsampled dataset, SPCC
+v_aci_spcc_rs %>% 
+  dplyr::rename(
+    `Variant_2016` = "group",
+    `Call_Type_1` = "category_1",
+    `Call_Type_2` = "category_2"
+  ) %>% 
+  dplyr::inner_join(
+    read.csv(file.path(gpath, "randomSampling_allCallTypes_SPCC.csv")) %>% 
+      group_by(Call_Type_Year) %>%
+      dplyr::summarise(n_calls_CallType_1 = n()) %>% 
+      dplyr::rename(
+        `Call_Type_1` = "Call_Type_Year"
+      ),
+    by = c("Call_Type_1")
+  ) %>% 
+  dplyr::inner_join(
+    read.csv(file.path(gpath, "randomSampling_allCallTypes_SPCC.csv")) %>% 
+      group_by(Call_Type_Year) %>%
+      dplyr::summarise(n_calls_CallType_2 = n()) %>% 
+      dplyr::rename(
+        `Call_Type_2` = "Call_Type_Year"
+      ),
+    by = c("Call_Type_2")
+  ) %>% 
+  dplyr::mutate(
+    similarity_method = "SPCC",
+    analysis_type = "Sample size controlled by random subsampling"
+  ) %>% 
+  # Randomly subsampled dataset, random forests
+  bind_rows(
+    
+    v_aci_rf_rs %>% 
+      dplyr::rename(
+        `Variant_2016` = "group",
+        `Call_Type_1` = "category_1",
+        `Call_Type_2` = "category_2"
+      ) %>% 
+      dplyr::inner_join(
+        read.csv(file.path(gpath, "randomSampling_allCallTypes_RF.csv")) %>% 
+          group_by(Call_Type_Year) %>%
+          dplyr::summarise(n_calls_CallType_1 = n()) %>% 
+          dplyr::rename(
+            `Call_Type_1` = "Call_Type_Year"
+          ),
+        by = c("Call_Type_1")
+      ) %>% 
+      dplyr::inner_join(
+        read.csv(file.path(gpath, "randomSampling_allCallTypes_RF.csv")) %>% 
+          group_by(Call_Type_Year) %>%
+          dplyr::summarise(n_calls_CallType_2 = n()) %>% 
+          dplyr::rename(
+            `Call_Type_2` = "Call_Type_Year"
+          ),
+        by = c("Call_Type_2")
+      ) %>% 
+      dplyr::mutate(
+        similarity_method = "RF",
+        analysis_type = "Sample size controlled by random subsampling"
+      ) 
+  ) %>% 
+  
+  # Randomly subsampled and quality-filtered dataset, SPCC
+  bind_rows(
+    
+    v_aci_spcc_rs_hQ %>% 
+      dplyr::rename(
+        `Variant_2016` = "group",
+        `Call_Type_1` = "category_1",
+        `Call_Type_2` = "category_2"
+      ) %>% 
+      dplyr::inner_join(
+        read.csv(file.path(gpath, "randomSampling_allCallTypes_SPCC_hQ.csv")) %>% 
+          group_by(Call_Type_Year) %>%
+          dplyr::summarise(n_calls_CallType_1 = n()) %>% 
+          dplyr::rename(
+            `Call_Type_1` = "Call_Type_Year"
+          ),
+        by = c("Call_Type_1")
+      ) %>% 
+      dplyr::inner_join(
+        read.csv(file.path(gpath, "randomSampling_allCallTypes_SPCC_hQ.csv")) %>% 
+          group_by(Call_Type_Year) %>%
+          dplyr::summarise(n_calls_CallType_2 = n()) %>% 
+          dplyr::rename(
+            `Call_Type_2` = "Call_Type_Year"
+          ),
+        by = c("Call_Type_2")
+      ) %>% 
+      dplyr::mutate(
+        similarity_method = "SPCC",
+        analysis_type = "Sample size controlled by random subsampling; quality-filtered"
+      ) 
+  ) %>% 
+  
+  # Randomly subsampled and quality-filtered dataset, SPCC
+  bind_rows(
+    
+    v_aci_rf_rs_hQ %>% 
+      dplyr::rename(
+        `Variant_2016` = "group",
+        `Call_Type_1` = "category_1",
+        `Call_Type_2` = "category_2"
+      ) %>% 
+      dplyr::inner_join(
+        read.csv(file.path(gpath, "randomSampling_allCallTypes_RF_hQ.csv")) %>% 
+          group_by(Call_Type_Year) %>%
+          dplyr::summarise(n_calls_CallType_1 = n()) %>% 
+          dplyr::rename(
+            `Call_Type_1` = "Call_Type_Year"
+          ),
+        by = c("Call_Type_1")
+      ) %>% 
+      dplyr::inner_join(
+        read.csv(file.path(gpath, "randomSampling_allCallTypes_RF_hQ.csv")) %>% 
+          group_by(Call_Type_Year) %>%
+          dplyr::summarise(n_calls_CallType_2 = n()) %>% 
+          dplyr::rename(
+            `Call_Type_2` = "Call_Type_Year"
+          ),
+        by = c("Call_Type_2")
+      ) %>% 
+      dplyr::mutate(
+        similarity_method = "RF",
+        analysis_type = "Sample size controlled by random subsampling; quality-filtered"
+      ) 
+  ) %>% 
+  ungroup() %>% 
+  write.csv(file.path(gpath, "AcousticDistinctivenessIndex_2016VariantsHistoricalCallTypes_SPCC_RF.csv"), row.names = FALSE)
+
+```
+
+Use the mean acoustic distinctiveness among the North and South 1994 and 2005 call types (by similarity method) as a threshold for determining how different the 2016 variants are to the historical call types. To get this threshold I used the random sampling only dataset that controlled for variation in sample size over time (no filter for call quality).
+```{r echo = TRUE, eval = TRUE}
+
+aci_variants_res <- read.csv(file.path(gpath, "AcousticDistinctivenessIndex_2016VariantsHistoricalCallTypes_SPCC_RF.csv"), header = TRUE)
+glimpse(aci_variants_res)
+
+# What was the mean and range of acoustic distinctiveness among the North and South historical call types?
+thresh_df <- aci_variants_res %>%
+  dplyr::select(-c(Variant_2016)) %>% 
+  dplyr::mutate(
+    comps = paste(Call_Type_1, Call_Type_2, sep = "_")
+  ) %>%
+  # Pick the random sampling only method, this will be more conservative
+  dplyr::filter(analysis_type == "Sample size controlled by random subsampling") %>% 
+  dplyr::mutate(
+    comps = paste(Call_Type_1, Call_Type_2, sep = "-")
+  ) %>%
+  # Get the acoustic distinctiveness of North and South compared in the same sampling years
+  dplyr::filter(comps %in% c(
+    "North_1994-South_1994", "North_2005-South_2005"
+  )) %>%
+  distinct() %>% 
+  # View()
+  dplyr::select(-c(comps)) %>%  
+  group_by(similarity_method) %>% 
+  dplyr::summarise(
+    min_th = round(min(acoustic_distinctiveness), 2),
+    mean_th = round(mean(acoustic_distinctiveness), 2),
+    max_th = round(max(acoustic_distinctiveness), 2)
+  )
+
+# Proceeding with the mean acoustic distinctiveness for North and South in 1994 and 2005 per similarity method as a threshold below
+thresh_df
+
+
+```
+
+Check the consistency of these calculations across similarity methods, as well as controlling for variation in sample sizes and call quality.
+```{r echo = TRUE, eval = TRUE}
+
+aci_variants_res <- read.csv(file.path(gpath, "AcousticDistinctivenessIndex_2016VariantsHistoricalCallTypes_SPCC_RF.csv"), header = TRUE)
+glimpse(aci_variants_res)
+
+# Get the unique comparisons of interest across years
+aci_variants_res2 <- aci_variants_res %>% 
+  dplyr::mutate(
+    comps = paste(Call_Type_2, Call_Type_1, sep = "_")
+  ) %>% 
+  # View()
+  dplyr::filter(comps %in% c(
+    # North-A against historical call types in each year
+    "North-A_2016_North_1994",
+    "North-A_2016_South_1994",
+    "North-A_2016_Nica_1994",
+    "North-A_2016_North_2005",
+    "North-A_2016_South_2005",
+    "North-A_2016_Nica_2005",
+    "North-A_2016_North_2016",
+    "North-A_2016_South_2016",
+    
+    # South-A against historical call types in each year
+    "South-A_2016_North_1994",
+    "South-A_2016_South_1994",
+    "South-A_2016_Nica_1994",
+    "South-A_2016_North_2005",
+    "South-A_2016_South_2005",
+    "South-A_2016_Nica_2005",
+    "South-A_2016_North_2016",
+    "South-A_2016_South_2016",
+    
+    # South-B against historical call types in each year
+    "South-B_2016_North_1994",
+    "South-B_2016_South_1994",
+    "South-B_2016_Nica_1994",
+    "South-B_2016_North_2005",
+    "South-B_2016_South_2005",
+    "South-B_2016_Nica_2005",
+    "South-B_2016_North_2016",
+    "South-B_2016_South_2016",
+    
+    # South-C against historical call types in each year
+    "South-C_2016_North_1994",
+    "South-C_2016_South_1994",
+    "South-C_2016_Nica_1994",
+    "South-C_2016_North_2005",
+    "South-C_2016_South_2005",
+    "South-C_2016_Nica_2005",
+    "South-C_2016_North_2016",
+    "South-C_2016_South_2016"
+    
+  )) %>% 
+  dplyr::select(-c(comps))
+
+glimpse(aci_variants_res2)
+
+### Make an accompanying visual using the same threshold as above
+
+unique(aci_variants_res2$Call_Type_2)
+
+gg_df <- aci_variants_res2 %>%
+  dplyr::inner_join(
+    thresh_df,
+    by = "similarity_method"
+  ) %>% 
+  dplyr::mutate(
+    Historical_Call_Type = Call_Type_1,
+    analysis_type = ifelse(grepl("quality", analysis_type), "Control for sample size + quality", "Control for sample size")
+  ) %>% 
+  dplyr::select(Variant_2016, Historical_Call_Type, acoustic_distinctiveness, similarity_method, analysis_type, mean_th) %>% 
+  dplyr::mutate(
+    Variant_2016 = factor(Variant_2016, levels = c("North-A_2016", "South-A_2016", "South-B_2016", "South-C_2016")),
+    similarity_method = factor(similarity_method, levels = c("SPCC", "RF"))
+  ) %>% 
+  # Determine whether there is high distinctiveness by similarity method
+  dplyr::group_by(similarity_method) %>% 
+  dplyr::mutate(
+    high_distinctiveness = ifelse(acoustic_distinctiveness >= mean_th, "Yes", "No")
+  ) %>% 
+  ungroup() %>% 
+  dplyr::mutate(
+    Historical_Call_Type = factor(Historical_Call_Type, levels = c("North_1994", "North_2005", "North_2016", "Nica_1994", "Nica_2005", "South_1994", "South_2005", "South_2016")),
+    high_distinctiveness = factor(high_distinctiveness, levels = c("Yes", "No"))
+  )
+
+glimpse(gg_df)
+# View(gg_df)
+
+# Shapes by analysis dataset
+shps <- c(21, 23)
+
+# Colors and fills by high distinctiveness
+cols <- c("firebrick", "black")
+fills <- c(alpha("firebrick", 0.4), alpha("white", 0))
+
+gg_df %>% 
+  ggplot(aes(x = Historical_Call_Type, y = acoustic_distinctiveness, shape = analysis_type, color = high_distinctiveness, fill = high_distinctiveness)) +
+  geom_point(size = 2.75, stroke = 0.5) +
+  geom_hline(data = thresh_df %>% 
+               dplyr::mutate(similarity_method = factor(similarity_method)), aes(yintercept = mean_th), linetype = "dashed", color = "firebrick") +
+  facet_wrap(Variant_2016 ~ similarity_method, nrow = 2) +
+  scale_shape_manual(values = shps) +
+  scale_color_manual(values = cols) +
+  scale_fill_manual(values = fills) +
+  guides(color = guide_legend(override.aes = list(shape = 21), nrow = 2), shape = guide_legend(nrow = 2)) +
+  scale_y_continuous(limits = c(0, 1)) +
+  ylab("Acoustic Distinctiveness") +
+  xlab("Historical Call Type") +
+  theme_bw() +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    axis.text.x = element_text(size = 8, angle = 40, vjust = 1, hjust = 1),
+    strip.text = element_text(size = 9),
+    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 9),
+    axis.title = element_text(size = 9)
+  )
+
+ggsave(file.path(gpath, "2016Variants_HistoricalCallTypes_AdIndex.tiff"), width = 7.4, height = 6, units = "in", dpi = 200)
+
+```
+
+Given this analysis, using the same high distinctiveness thresholds specific to SPCC and random forests as above (0.81 and 0.70, respectively, representing the minimum distinctiveness among the historical call types), South-C is the only variant in 2016 that displays the highest distinctiveness to the most historical call types. So this is the candidate with the most support for being an "incipient" dialect. This result generally holds only for both SPCC and random forests similarity, but is a little less robust to filtering for call quality.
+
+However, there does appear to be a trend that holds for each of the South variants across analysis datasets and similarity methods: relatively higher distinctiveness to South 1994 compared to South 2005 and 2016, indicating that these call types may be emerging or incipient structural variation between 1994 and 2016.
+
+North-A maps back to both Nica in 1994 amd 2005, and South in 2005 and 2016 (e.g. it was most similar to those call types).
+
+Making a figure of acoustic space polygons for South-C (the most distinctive variant) against historical call types (North and South across years, so 6 panels total). SPCC only while controlling for variation in sample size.
+```{r echo = TRUE, eval = FALSE}
+
+# Call variants and types to compare listed by year
+variants_types <- list(
+  c("South-C_2016", "South"),
+  c("South-C_2016", "South"),
+  c("South-C_2016", "South")
+)
+
+# A list of years
+temporal_groups <- c("1994", "2005", "2016")
+
+# x <- 1
+variant_comparisons <- lapply(1:length(variants_types), function(x){
+  
+  tmp <- expand.grid(rep(variants_types[x], 2)) %>% 
+    dplyr::mutate(
+      Var1 = as.character(Var1),
+      Var2 = as.character(Var2)
+    )
+  
+  return(tmp)
+  
+})
+
+variant_comparisons
+
+```
+
+Make a faceted plot for these comparisons, and use code from the spatial plotting function.
+```{r echo = TRUE, eval = FALSE}
+
+### SPCC
+
+mds_spcc_rs_df <- read.csv(file.path(gpath, "randomSampling_allCallTypes_SPCC.csv")) %>% 
+  # The grouping column must be a factor
+  dplyr::mutate(
+    !!group_col := factor(!!sym(group_col))
+  ) %>%
+  dplyr::filter(Call_Type %in% c("South", "South-C")) %>%
+  droplevels()
+
+glimpse(mds_spcc_rs_df)
+# unique(mds_spcc_rs_df$Call_Type_Year)
+
+# 25 calls used per call type and year
+mds_spcc_rs_df %>%
+  group_by(Call_Type, Year) %>%
+  dplyr::summarise(n = n()) %>%
+  pivot_wider(
+    names_from = "Year",
+    values_from = "n"
+  )
+
+# Get the list of spatial polygons representing the 95% density contour of each call type per year in acoustic space
+# Each polys object is a list that contains 1 polygon per call type in each year
+spcc_rs_95polys <- get95polys(df = mds_spcc_rs_df, X_col = "X", Y_col = "Y", group_col = "Call_Type_Year")
+names(spcc_rs_95polys)
+
+# Making a custom supplementary figure
+group_col <- "Call_Type_Year"
+
+# Convert the list of polygons to a SpatialPolygonsDataFrame
+# First merge the polygons together into a single SpatialPolygons object
+polys_spdf <- do.call(rbind, spcc_rs_95polys)
+# str(polys_spdf)
+
+# Add back the group column to the SpatialPolygonsDataFrame as an ID slot
+polys_spdf[[group_col]] <- getSpPPolygonsIDSlots(polys_spdf)
+
+yrs_ord <- as.character(unique(unlist(temporal_groups)[order(unlist(temporal_groups), decreasing = FALSE)]))
+# yrs_ord
+
+# Use the fortified data frame to make plots
+ggpoly <- fortify(polys_spdf) %>%
+  dplyr::mutate(
+    id = factor(id, levels = levels(mds_spcc_rs_df[[group_col]])),
+    call_type = gsub("_([0-9]+)", "", id),
+    year = gsub("([A-Z]+[a-z]+)_|([A-Z]+[a-z]+)-([A-Z]+)_", "", id)
+  )
+
+str(ggpoly)
+unique(ggpoly$call_type)
+unique(ggpoly$year)
+
+# Add dummy data for South-C in 1994 and 2005
+ggpoly2 <- ggpoly %>% 
+  bind_rows(
+    ggpoly %>% 
+      dplyr::filter(call_type == "South-C") %>% 
+      dplyr::mutate(
+        year = "1994"
+      )
+  ) %>% 
+  bind_rows(
+    ggpoly %>% 
+      dplyr::filter(call_type == "South-C") %>% 
+      dplyr::mutate(
+        year = "2005"
+      )
+  ) %>% 
+  dplyr::mutate(
+    year = factor(year, levels = yrs_ord)
+  )
+
+str(ggpoly2)  
+
+# Aesthetics
+pttrn <- c("none", "none")
+dens <- c(0, 0)
+pszs <- c(0, 0)
+fills <- c(alpha('mediumpurple4', 0.75), alpha('gray', 0.75))
+
+# Spatial coordinates
+bufx <- -min(ggpoly$long)
+bufy <- 0.07
+coord.x <- min(ggpoly$long) + bufx
+coord.y <- max(ggpoly$lat) + bufy
+
+# Make patterned polygons by geographic region
+ggplot() + 
+  geom_polygon_pattern(data = ggpoly2, aes(x = long, y = lat, group = group, pattern = call_type, pattern_density = call_type, pattern_size = call_type, fill = call_type, colour = call_type), stat = "identity") +
+  facet_wrap(~ year, scales = "fixed", nrow = 1) +
+  scale_pattern_manual(values = pttrn) +
+  scale_pattern_density_manual(values = dens) +
+  scale_pattern_size_manual(values = pszs) +
+  scale_fill_manual(values = fills) +
+  scale_color_manual(values = fills) +
+  scale_y_continuous(limits = c(min(ggpoly$lat), max(ggpoly$lat) + 0.05)) +
+  xlab("MDS Dimension 1") +
+  ylab("MDS Dimension 2") +
+  guides(
+    fill = guide_legend(title = "Call Type or Variant", nrow = 1, override.aes = list(pattern = "none")), 
+    color = guide_legend(title = "Call Type or Variant", nrow = 1), 
+    pattern = "none", 
+    pattern_size = "none",
+    pattern_density = "none"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(size = 10), 
+    axis.text.x = element_text(size = 9.5), 
+    strip.text = element_text(size = 12, margin = ggplot2::margin(0.25, 0, 0.25, 0, "line"), face = "bold"), 
+    axis.title = element_text(size = 12), 
+    plot.margin = unit(rep(0.25, 4), "line"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.direction = "horizontal",
+    legend.position = "top",
+    legend.key.height = unit(1, "lines"),
+    legend.key.width = unit(3, "lines")
+  )
+
+ggsave(file.path(gpath, "AcousticSpacePolygons_South-C_South.tiff"), width = 6, height = 4, units = "in", dpi = 200)
+
+```

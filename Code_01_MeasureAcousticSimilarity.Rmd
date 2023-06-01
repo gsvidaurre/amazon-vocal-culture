@@ -1,0 +1,658 @@
+---
+title: "Measure Acoustic Similarity"
+author: "Grace Smith-Vidaurre"
+date: <center style="font-size:22px;font-style:normal;>`r format(Sys.time(), '%d %B, %Y')`</center>
+  <br />
+output: 
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float:
+      collapsed: false
+---
+
+Purpose: I measured acoustic similarity of contact calls over time using spectrographic cross-correlation and supervised random forests. These similarity metrics were obtained across all calls, and then I used multidimensional scaling (MDS) to obtain coordinates for calls in low-dimensional space per similarity method. I optimized the number of total dimension used for MDS per similarity method in order to reduce stress. The MDS coordinates were used in subsequent analyses to analyze structural change in calls over time.
+
+```{r eval = TRUE, echo = FALSE}
+
+knitr::opts_knit$set(root.dir = "/media/gsvidaurre/MYIOPSITTA/R/YNA_CulturalEvolutionAnalysis_2019/")
+
+```
+
+Install packages needed to run analyses for this project. Packages MASS, parallel, and grid are usually provided with the base R installation. 
+```{r, eval = FALSE, echo = TRUE}
+
+# Install packages from CRAN
+# maptools has to be installed for spatialEco
+X <- c("ggplot2", "pbapply", "data.table", "tidyverse", "mclust", "scales", "egg", "ggplotify", "grid", "rgdal", "vegan", "randomForest", "ks", "sp", "raster", "smoothr", "rgeos", "spatialEco", "tidyselect", "Rmisc", "plotrix", "maptools", "warbleR", "MASS", "reshape2", "future.apply")
+
+is_installed <- function(p) is.element(p, installed.packages()[,1])
+
+invisible(lapply(1:length(X), function(x){
+  if(!is_installed(X[x])){
+    install.packages(X[x], repos = "http://lib.stat.cmu.edu/R/CRAN")
+  }
+}))
+
+# Install the most recent version of the warbleR package from GitHub
+# Install devtools if not installed
+if (!"devtools" %in% installed.packages()[,"Package"]) install.packages("devtools")
+
+# Linux users may have to install fftw:
+# sudo apt-get install libfftw3-dev libfftw3-doc
+# as well as cmake for bioacoustics to be installed:
+# sudo apt-get install cmake
+library(devtools)
+devtools::install_github("maRce10/warbleR")
+
+# Linux users may have to install magick via the command line
+devtools::install_github("coolbutuseless/ggpattern")
+
+# Linux users may need to run the following terminal commands to install devtools and CRAN packages: 
+# sudo apt-get install libcurl4-openssl-dev 
+# sudo apt-get install libssl-dev
+# sudo apt-get install libxml2-dev
+# sudo apt install libgeos-dev
+# sudo apt install libgdal-dev
+# sudo apt install libudunits2-dev
+
+```
+
+Clean environment and load packages.
+```{r echo = TRUE, eval = TRUE, message = FALSE}
+
+# Clean global environment
+rm(list = ls())
+
+X <- c("warbleR", "ggplot2", "pbapply", "parallel", "data.table", "tidyverse", "MASS", "mclust", "scales", "egg", "ggplotify", "grid", "rgdal", "vegan", "randomForest", "ks", "sp", "raster", "smoothr", "rgeos", "spatialEco", "ggpattern", "reshape2")
+
+invisible(lapply(X, library, character.only = TRUE))
+
+# Set up parallel processing for certain applications below
+cores <- parallel::detectCores() - 2
+cores
+
+```
+
+Read in metadata and extended selection table.
+```{r echo = TRUE, eval = TRUE}
+
+path <- "/media/gsvidaurre/MYIOPSITTA/R/YNA_CulturalEvolutionAnalysis_2019"
+
+gpath <- "/home/gsvidaurre/Desktop/MANUSCRIPTS/YellowNapedAmazon_CulturalEvolution/GRAPHICS"
+
+# Extended selection table: the selecton table spreadsheet plus .wav files
+ccs_est <- readRDS(file.path(path, "AmazonVocalCulture_ExtendedSelectionTable_31May2023.RDS"))
+glimpse(ccs_est)
+
+# Sampling rates
+table(ccs_est$Year, ccs_est$sampling_rate)
+
+# Calls with and without overlapping signals
+table(ccs_est$Overlapping_Signal)
+table(ccs_est$Rescued_by_Tighter_Bandpass)
+
+seed <- 401
+
+# Initialize years
+yrs <- unique(ccs_est$Year)
+yrs
+
+```
+
+# Measure acoustic similarity
+
+## SPCC acoustic similarity on all calls
+
+I previously ran SPCC on the full dataset of calls across years on the Wright Ubuntu computer (08 De 2020), which has more computation capacity than my local machine. warbleR version 1.1.24, the most current version on CRAN.
+
+On 14 May 2023 I ran SPCC on a powerful Mac, warbleR version 1.1.28, R version 4.3.0 (2023-04-21).
+```{r echo = TRUE, eval = FALSE}
+
+xc_mat <- warbleR::cross_correlation(ccs_est, wl = 450, bp = "pairwise.freq.range", ovlp = 90, wn = 'hanning', cor.method = "pearson", parallel = cores, na.rm = FALSE, output = "cor.mat", type = "fourier")
+str(xc_mat)
+  
+# Change dimension names of matrices to match sound file names in the EST
+dimnames(xc_mat)[[1]] <- gsub(".wav-1", ".wav", dimnames(xc_mat)[[1]])
+dimnames(xc_mat)[[2]] <- gsub(".wav-1", ".wav", dimnames(xc_mat)[[2]])
+  
+saveRDS(xc_mat, file.path(path, "xc_mat_allCalls.RDS"))
+
+```
+
+## Optimize MDS for SPCC
+
+Run MDS on the full SPCC matrix. Limited to fewer dimensions on a local computer for minimizing stress since the full matrix of calls is very large. On 13 April 2021, I ran MDS optimization for the SPCC matrix on the NMSU supercomputer from 2 to 40 dimensions, 1000 maximum iterations. R version 3.6.1, MASS package version 7.3_51.3. 
+
+On 14 May 2023, I reran MDS optimization for SPCC on the same Mac computer as above using MASS version 7.3-58.4 and future.apply version 1.1.0 for running the analysis in parallel (about 6 hours total). I ran the bash script `run_optimize_scripts.bash` to run the R script `optimize_MDS_SPCC_localParallel.R` through the R command line. This was the only way to use the `multicore` argument in `future.lapply`, since this form of parallel processing isn't compatible with RStudio. The file `optimize_MDS_SPCC_localParallel.Rout` contains the standard output/error from running that R script.
+
+We chose an MDS procedure by comparing MDS stress. Lower stress is preferable, and we used an stress value of 0.05 as a general rule-of-thumb for low stress. 
+```{r echo = TRUE, eval = TRUE}
+
+# Read in optimization results
+stress <- readRDS(file.path(path, "MDS_stress_SPCC_list.RDS"))
+str(stress)
+names(stress)
+
+dims <- seq(2, 20, 1)
+
+# Extract stress values across similarity methods and dimensions
+# i <- 1
+# j <- 1
+stress_df <- rbindlist(pblapply(1:length(stress), function(i){
+  return(data.frame(method = "SPCC", dimensions = names(stress)[i], stress = (stress[[i]]$stress)/100))
+}))
+glimpse(stress_df)
+
+stress_df <- stress_df %>%
+  dplyr::mutate(
+    dimensions = as.numeric(as.character(dimensions))
+  )
+
+stress_df %>%
+  ggplot(aes(x = dimensions, y = stress)) + 
+  geom_line() +
+  geom_point(shape = 21, size = 4, fill = "gray") +
+  facet_wrap(~ method) +
+  geom_hline(aes(yintercept = 0.05), linetype = "dashed", color = "black", linewidth = 0.5) +
+  xlab("MDS Dimensions") + ylab("Stress") +
+  scale_x_continuous(breaks = seq(min(dims), max(dims), 5), labels = seq(min(dims), max(dims), 5)) +
+  scale_y_continuous(breaks = seq(0, max(stress_df$stress), 0.05), labels = seq(0, max(stress_df$stress), 0.05)) +
+  theme(
+    panel.background = element_rect(fill = "white"), 
+    plot.background = element_rect(fill = "white"), 
+    panel.grid.major = element_line(size = 3, colour = "white"), 
+    panel.grid.minor = element_line(size = 0.75, colour = "white"), 
+    axis.line = element_line(size = 0.45, colour = "black"), 
+    axis.title = element_text(size = 14), 
+    axis.text = element_text(size = 10), 
+    strip.text.x = element_text(size = 12), 
+    legend.position = "top"
+  )
+
+```
+
+Find the number of dimensions that yielded the "optimal" solution using the rule of thumb above. This was 18 total dimensions.
+```{r echo = TRUE, eval = TRUE}
+
+opt_dims <- stress_df$dimensions[which(abs(stress_df$stress - 0.05) == min(abs(stress_df$stress - 0.05)))]
+
+opt_dims
+
+```
+
+I took MDS results from this "optimal" solution, and used them to make plots of acoustic space, as well as for an unsupervised random forests analysis.
+```{r echo = TRUE, eval = FALSE}
+
+iso_res <- readRDS(file.path(path, "MDS_stress_SPCC_list.RDS"))
+names(iso_res)
+
+opt_dims # 18
+
+spcc_iso <- iso_res[[as.character(eval(opt_dims))]]$points
+str(spcc_iso)
+
+saveRDS(spcc_iso, file.path(path, "SPCC_isoMDSopt.RDS"))
+
+```
+
+Make a visualization with optimized SPCC coordinates.
+```{r echo = TRUE, eval = FALSE}
+
+iso <- readRDS(file.path(path, "SPCC_isoMDSopt.RDS"))
+# dimnames(iso)[[1]]
+
+iso_spcc_df <- data.frame(X = iso[, 1], Y = iso[, 2]) %>%
+  dplyr::mutate(
+    sound.files = dimnames(iso)[[1]]
+  )
+glimpse(iso_spcc_df)
+
+mds_spcc_df <- ccs_est %>%
+  as_tibble() %>%
+  dplyr::select(sound.files, Year, new_site_code, CallTypesVariants) %>%
+  left_join(
+    iso_spcc_df,
+    by = "sound.files"
+  ) %>%
+  dplyr::mutate(
+    Year = factor(Year)
+  ) %>%
+  dplyr::rename(
+    Call_Type = CallTypesVariants
+  ) %>%
+  # Order Call_Type column
+  dplyr::mutate(
+    Call_Type = factor(Call_Type, levels = c("North", "South", "Nica-VarA", "Nica-VarB", "North-VarA", "South-VarA", "South-VarB", "South-VarC"))
+  ) %>%
+  dplyr::select(sound.files, Year, new_site_code, Call_Type, X, Y)
+
+glimpse(mds_spcc_df) 
+
+# Shapes by year
+shps <- c(21, 22, 24)
+
+# Fill colors by call type
+# length(unique(mds_spcc_df$CallTypesVariantssVariants))
+fills <- c(alpha("navy", 0.65), alpha("firebrick", 0.65), alpha("gold", 1), alpha("gold3", 1), "gray65", "darkgoldenrod4", "mediumpurple", "turquoise", "black")
+
+# x11() # to see the plot in a separate window
+mds_spcc_df %>%
+  ggplot(aes(x = X, y = Y)) +
+  # geom_point(aes(color = Call_Type, fill = Call_Type, shape = Year), size = 2) + 
+  geom_point(aes(color = Call_Type, fill = Call_Type), size = 2) + 
+  facet_wrap(~ Year) +
+  scale_color_manual(values = fills) +
+  scale_fill_manual(values = fills) +
+  # scale_shape_manual(values = shps) + 
+  xlab("") + ylab("") + 
+  theme_bw() + 
+  theme(
+    legend.position = "top", 
+    plot.title = element_text(hjust = 0.5, size = 18), 
+    strip.text = element_text(size = 12, margin = ggplot2::margin(0.5, 0, 0.5, 0, "line")), 
+    axis.title = element_text(size = 18), 
+    axis.text = element_text(size = 10), 
+    plot.margin = unit(rep(0.05, 4), "cm")
+  )
+
+```
+
+I saved the SPCC MDS coordinates and metadata together for subsequent analyses.
+```{r}
+
+write.csv(mds_spcc_df, file.path(path, "MDS_SPCC_coordinates.csv"), row.names = FALSE)
+
+```
+
+## Unsupervised random forests similarity for all calls
+
+Measure standard acoustic parameters per call.
+```{r echo = TRUE, eval = FALSE}
+
+ameas <- specan(ccs_est, bp = "frange", wl = 450, threshold = 15, parallel = cores, fast = FALSE, pb = TRUE, ovlp = 90, wn = "hanning", fsmooth = 0.1, harmonicity = FALSE)
+
+glimpse(ameas)
+
+write.csv(ameas, file.path(path, "acoustic_measurements.csv"), row.names = FALSE)
+
+```
+
+Obtain Mel-frequency cepstral coefficient descriptive statistics.
+```{r echo = TRUE, eval = FALSE}
+
+mfcc <- mfcc_stats(ccs_est, bp = "frange", wl = 450, parallel = cores, pb = TRUE, ovlp = 90, numcep = 25, nbands = 40)
+
+glimpse(mfcc)
+
+write.csv(mfcc, file.path(path, "MFCC_desccriptiveStats.csv"), row.names = FALSE)
+
+```
+
+Combine features and measurements for unsupervised machine learning.
+```{r echo = TRUE, eval = FALSE}
+
+iso <- readRDS(file.path(path, "SPCC_isoMDSopt.RDS"))
+str(iso)
+
+# Make a data frame of isoMDS points
+iso_df <- as.data.frame(iso) %>%
+  dplyr::mutate(
+    sound.files = dimnames(iso)[[1]]
+  ) %>%
+  dplyr::select(c(sound.files, names(.)[-grep("sound.files", names(.))]))
+
+glimpse(iso_df)
+
+# Change column names
+names(iso_df)[-grep("sound.files", names(iso_df))] <- paste("SPCC_MDS_D", seq(1, opt_dims, 1), sep = "")
+glimpse(iso_df)
+
+ameas <- read.csv(file.path(path, "acoustic_measurements.csv"))
+names(ameas)
+
+mfcc <- read.csv(file.path(path, "MFCC_desccriptiveStats.csv"))
+names(mfcc)
+
+rf_preds <- ameas %>%
+  inner_join(
+    mfcc %>%
+      dplyr::select(-c("selec")),
+    by = c("sound.files")
+  ) %>%
+  # glimpse()
+  inner_join(
+    iso_df,
+    by = c("sound.files")
+  ) %>%
+  dplyr::select(-c("selec"))
+
+glimpse(rf_preds)
+ 
+write.csv(rf_preds, file.path(path, "randomForests_predictors.csv"), row.names = FALSE)
+
+```
+
+Run unsupervised random forests with randomForest package version 4.6-14.
+```{r echo = TRUE, eval = TRUE}
+
+rf_preds <- read.csv(file.path(path, "randomForests_predictors.csv"))
+glimpse(rf_preds)
+
+# 224 predictors
+length(names(rf_preds[, sapply(rf_preds, is.numeric)]))
+
+# 27 standard spectral acoustic measurements
+length(names(rf_preds)[-grep(".cc|MDS|sound.files", names(rf_preds))])
+
+# These are the standard spectral acoustic measurements
+names(rf_preds)[-grep(".cc|MDS|sound.files", names(rf_preds))]
+
+# [1] "duration"    "meanfreq"    "sd"          "freq.median"
+# [5] "freq.Q25"    "freq.Q75"    "freq.IQR"    "time.median"
+# [9] "time.Q25"    "time.Q75"    "time.IQR"    "skew"       
+# [13] "kurt"        "sp.ent"      "time.ent"    "entropy"    
+# [17] "sfm"         "meandom"     "mindom"      "maxdom"     
+# [21] "dfrange"     "modindx"     "startdom"    "enddom"     
+# [25] "dfslope"     "meanpeakf"   "peakf"    
+
+# 179 MFCC descriptive statistics
+length(names(rf_preds)[grep(".cc", names(rf_preds))])
+
+# These are the MFCC descriptive statistics
+names(rf_preds)[grep(".cc", names(rf_preds))]
+
+# 18 SPCC MDS predictors
+length(names(rf_preds)[grep("SPCC_MDS", names(rf_preds))])
+
+```
+
+Using the randomForests package version 4.7-1.1. I did not use ranger since it did not have an out of the box unsupervised method at this time.
+```{r echo = TRUE, eval = FALSE}
+
+?randomForest
+
+# Checking number of predictors, looks good
+length(which(sapply(rf_preds, is.numeric)))
+
+rf_unsup <- randomForest(rf_preds[, sapply(rf_preds, is.numeric)], y = NULL, ntree = 2000, proximity = TRUE)
+str(rf_unsup)
+
+saveRDS(rf_unsup, file.path(path, "rf_unsup.RDS"))
+
+```
+
+Get proximity matrix as the random forests similarity measurements.
+```{r echo = TRUE, eval = FALSE}
+
+rf_unsup <- readRDS(file.path(path, "rf_unsup.RDS"))
+
+rf_prox <- rf_unsup$proximity
+dimnames(rf_prox) <- list(rf_preds$sound.files, rf_preds$sound.files) 
+str(rf_prox)
+
+saveRDS(rf_prox, file.path(path, "rf_unsup_prox.RDS"))
+
+```
+
+Variable importance.
+```{r echo = TRUE, eval = FALSE}
+
+rf_unsup <- readRDS(file.path(path, "rf_unsup.RDS"))
+names(rf_unsup)
+
+varImpPlot(rf_unsup)
+
+```
+
+MDS optimization for random forests similarity matrix. Limited to fewer dimensions on a local computer for minimizing stress since the full matrix of calls is very large. On 13 April 2021, ran MDS optimization for the RF matrix on the NMSU supercomputer from 2 to 40 dimensions, 1000 maximum iterations. R version 3.6.1, MASS package version 7.3_51.3.
+
+On 16 May 2023, I reran MDS optimization for random forests on the same Mac computer as above using MASS version 7.3-58.4 and future.apply version 1.1.0 for running the analysis in parallel (about 6 hours total). I ran the bash script `run_optimize_scripts.bash` to run the R script `optimize_MDS_RF_localParallel.R` through the R command line.The file `optimize_MDS_RF_localParallel.Rout` contains the standard output/error from running that R script.
+
+Used same routine for choosing an "optimal" number of dimensions based on stress values. 
+```{r echo = TRUE, eval = TRUE}
+
+# Read in optimization results
+stress <- readRDS(file.path(path, "MDS_stress_RF_list.RDS"))
+# str(stress)
+
+dims <- seq(2, 20, 1)
+
+# Extract stress values across similarity methods and dimensions
+# i <- 1
+# j <- 1
+stress_df <- rbindlist(pblapply(1:length(stress), function(i){
+  return(data.frame(method = "RF", dimensions = names(stress)[i], stress = (stress[[i]]$stress)/100))
+}))
+
+glimpse(stress_df)
+
+stress_df <- stress_df %>%
+  dplyr::mutate(
+    dimensions = as.numeric(as.character(dimensions))
+  )
+
+stress_df %>%
+  ggplot(aes(x = dimensions, y = stress)) + 
+  geom_line() +
+  geom_point(shape = 21, size = 4, fill = "gray") +
+  facet_wrap(~ method) +
+  geom_hline(aes(yintercept = 0.05), linetype = "dashed", color = "black", size = 0.5) +
+  xlab("MDS Dimensions") + ylab("Stress") +
+  scale_x_continuous(breaks = seq(min(dims), max(dims), 5), labels = seq(min(dims), max(dims), 5)) +
+  scale_y_continuous(breaks = seq(0, max(stress_df$stress), 0.05), labels = seq(0, max(stress_df$stress), 0.05)) +
+  theme(
+    panel.background = element_rect(fill = "white"), 
+    plot.background = element_rect(fill = "white"), 
+    panel.grid.major = element_line(size = 3, colour = "white"), 
+    panel.grid.minor = element_line(size = 0.75, colour = "white"), 
+    axis.line = element_line(size = 0.45, colour = "black"), 
+    axis.title = element_text(size = 14), 
+    axis.text = element_text(size = 10), 
+    strip.text.x = element_text(size = 12), 
+    legend.position = "top"
+  )
+
+```
+
+Find the optimal number of dimensions.
+```{r echo = TRUE, eval = TRUE}
+
+opt_dims <- stress_df$dimensions[which(abs(stress_df$stress - 0.05) == min(abs(stress_df$stress - 0.05)))]
+
+opt_dims
+
+```
+
+Took MDS results from this optimal number of dimensions, and used MDS results to make plots of acoustic space, as well as for an unsupervised random forests analysis.
+```{r echo = TRUE, eval = FALSE}
+
+iso_res <- readRDS(file.path(path, "MDS_stress_RF_list.RDS"))
+
+opt_dims # 20
+
+rf_iso <- iso_res[[as.character(eval(opt_dims))]]$points
+str(rf_iso)
+
+saveRDS(rf_iso, file.path(path, "RF_isoMDSopt.RDS"))
+
+```
+
+Make visualization with optimized RF MDS coordinates.
+```{r echo = TRUE, eval = FALSE}
+
+iso <- readRDS(file.path(path, "RF_isoMDSopt.RDS"))
+
+iso_rf_df <- as.data.frame(iso) %>%
+  dplyr::mutate(
+    sound.files = dimnames(iso)[[1]]
+  ) %>%
+  dplyr::rename(
+    "X" = V1,
+    "Y" = V2
+  )
+glimpse(iso_rf_df)
+
+mds_rf_df <- ccs_est %>%
+  as_tibble() %>%
+  dplyr::select(sound.files, Year, new_site_code, CallTypesVariants) %>%
+  left_join(
+    iso_rf_df,
+    by = "sound.files"
+  ) %>%
+  dplyr::mutate(
+    Year = factor(Year)
+  )%>%
+  dplyr::rename(
+    Call_Type = CallTypesVariants
+  ) %>%
+  # Order Call_Type column
+  dplyr::mutate(
+    Call_Type = factor(Call_Type, levels = c("North", "South", "Nica-VarA", "Nica-VarB", "North-VarA", "South-VarA", "South-VarB", "South-VarC"))
+  ) %>%
+  dplyr::select(sound.files, Year, new_site_code, Call_Type, X, Y)
+
+glimpse(mds_rf_df) 
+
+# Shapes by year
+shps <- c(21, 22, 24)
+
+# Fill colors by call type
+# length(unique(mds_RF_df$CallTypesVariants))
+fills <- c(alpha("navy", 0.65), alpha("firebrick", 0.65), alpha("gold", 1), alpha("gold3", 1), "gray65", "darkgoldenrod4", "mediumpurple", "turquoise", "black")
+
+# x11()
+mds_rf_df %>%
+  ggplot(aes(x = X, y = Y)) +
+  geom_point(aes(color = Call_Type, fill = Call_Type), size = 2) + 
+  facet_wrap(~ Year) +
+  scale_color_manual(values = fills) +
+  scale_fill_manual(values = fills) +
+  # scale_shape_manual(values = shps) + 
+  xlab("") + ylab("") + 
+  theme_bw() + 
+  theme(
+    legend.position = "top", 
+    plot.title = element_text(hjust = 0.5, size = 18), 
+    strip.text = element_text(size = 12, margin = ggplot2::margin(0.5, 0, 0.5, 0, "line")), 
+    axis.title = element_text(size = 18), 
+    axis.text = element_text(size = 10), 
+    plot.margin = unit(rep(0.05, 4), "cm")
+  )
+
+```
+
+Acoustic space patterns are similar to SPCC.
+
+I saved the random forests MDS coordinates and metadata together for subsequent analyses.
+```{r}
+
+write.csv(mds_rf_df, file.path(path, "MDS_RandomForests_coordinates.csv"), row.names = FALSE)
+
+```
+
+Make a figure for 2016 calls with panels by similarity method, to show the overlap among variants and historical call types in acoustic space.
+```{r echo = TRUE, eval = FALSE}
+
+mds_spcc_df <- read.csv(file.path(path, "MDS_SPCC_coordinates.csv"), header = TRUE)
+glimpse(mds_spcc_df)
+
+mds_rf_df <- read.csv(file.path(path, "MDS_RandomForests_coordinates.csv"), header = TRUE)
+glimpse(mds_rf_df)
+
+# Fill colors by call types and variants column (see factor levels)
+# Using Chris's hex codes
+fills <- c("#0000FF", "#FCEE21", "#FF0000", "#B3E0A7", "#9E005D", "#662D91")
+shps <- c(23, 22, 24, 21, 4, 25)
+
+### All calls
+# x11()
+mds_spcc_df %>%
+  dplyr::mutate(
+    sim_meth = "SPCC"
+  ) %>%
+  filter(Year == "2016") %>%
+  bind_rows(
+    mds_rf_df %>%
+      dplyr::mutate(
+        sim_meth = "Random forests"
+      ) %>%
+      filter(Year == "2016")
+  ) %>%
+  dplyr::mutate(
+    Call_Type = factor(Call_Type, levels = c("North", "North-VarA", "South", "South-VarA", "South-VarB", "South-VarC")),
+    sim_meth = factor(sim_meth, levels = c("SPCC", "Random forests"))
+  ) %>%
+  ggplot(aes(x = X, y = Y)) +
+  geom_point(aes(color = Call_Type, fill = Call_Type, shape = Call_Type), size = 1) + 
+  facet_wrap(~ sim_meth, scales = "free") +
+  scale_color_manual(values = fills) +
+  scale_fill_manual(values = fills) +
+  scale_shape_manual(values = shps) +
+  xlab("Multidimensional Scaling Dimension 1") + 
+  ylab("Multidimensional Scaling Dimension 2") + 
+  guides(color = guide_legend(title = "Call Type or Variant", override.aes = list(size = 2)), fill = guide_legend(title = "Call Type or Variant"), shape = guide_legend(title = "Call Type or Variant")) +
+  theme_bw() + 
+  theme(
+    legend.position = "top", 
+    strip.text = element_text(size = 12, margin = ggplot2::margin(0.5, 0, 0.5, 0, "line")), 
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10), 
+    plot.margin = unit(rep(0.05, 4), "cm"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+### Only calls without overlapping signals: 1 call will be dropped for 1994, 77 calls for 2005, and 67 calls for 2016. Here these plots are for the 2016 calls only
+table(ccs_est$Year, ccs_est$Overlapping_Signal)
+
+### Only calls of high quality, see the numbers by year. Here I'm plotting 2016 calls only
+table(ccs_est$Year, ccs_est$Visual_Quality_Score)
+
+# Overall patterns are very similar compared to using all calls
+# x11()
+mds_spcc_df %>%
+  dplyr::mutate(
+    sim_meth = "SPCC"
+  ) %>%
+  filter(Year == "2016") %>%
+  bind_rows(
+    mds_rf_df %>%
+      dplyr::mutate(
+        sim_meth = "Random forests"
+      ) %>%
+      filter(Year == "2016")
+  ) %>%
+  dplyr::mutate(
+    Call_Type = factor(Call_Type, levels = c("North", "North-VarA", "South", "South-VarA", "South-VarB", "South-VarC")),
+    sim_meth = factor(sim_meth, levels = c("SPCC", "Random forests"))
+  ) %>%
+  dplyr::inner_join(
+    ccs_est %>%
+      as_tibble() %>%
+      dplyr::select(sound.files, Overlapping_Signal, Visual_Quality_Score),
+     by = "sound.files"
+  ) %>%
+  # dplyr::filter(Overlapping_Signal == "N") %>% 
+  dplyr::filter(Visual_Quality_Score == "H") %>%
+  ggplot(aes(x = X, y = Y)) +
+  geom_point(aes(color = Call_Type, fill = Call_Type, shape = Call_Type), size = 1) + 
+  facet_wrap(~ sim_meth, scales = "free") +
+  scale_color_manual(values = fills) +
+  scale_fill_manual(values = fills) +
+  scale_shape_manual(values = shps) +
+  xlab("Multidimensional Scaling Dimension 1") + 
+  ylab("Multidimensional Scaling Dimension 2") + 
+  guides(color = guide_legend(title = "Call Type or Variant", override.aes = list(size = 2)), fill = guide_legend(title = "Call Type or Variant"), shape = guide_legend(title = "Call Type or Variant")) +
+  theme_bw() + 
+  theme(
+    legend.position = "top", 
+    strip.text = element_text(size = 12, margin = ggplot2::margin(0.5, 0, 0.5, 0, "line")), 
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10), 
+    plot.margin = unit(rep(0.05, 4), "cm"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+```
