@@ -536,6 +536,14 @@ aci_rf_fd <- AcousticDriftIndex(polys = rf_95polys, comparisons_list = temporal_
 Make plots for a supplementary figure of all polygons per call type and year overlapping together, and then all polygons by call type in each year.
 ```{r}
 
+# North = blue, South = red/purple, Nica variants = gold/orange, hues by year
+cols <- list(
+  c(alpha("navy", 0.5), alpha("royalblue", 0.5), alpha("steelblue4", 0.5)),
+  c(alpha("firebrick", 0.5), alpha("lightcoral", 0.3), alpha("tomato", 0.5)),
+  c(alpha("darkorange2", 0.5), alpha("goldenrod2", 0.3))
+)
+# cols
+
 ggpoly <- fortify(do.call(rbind, spcc_95polys)) %>%
   dplyr::mutate(
     id = factor(id, levels = levels(mds_spcc_df_histDialects$Call_Type_Year)),
@@ -587,7 +595,6 @@ gg1 <- ggplot(data = ggpoly, aes(x = long, y = lat, group = group)) +
   
   xlab("") +
   ylab("") +
-  guides(color = "none", fill = "none") +
   scale_y_continuous(limits = c(-0.5, 0.6), breaks = seq(-0.5, 0.6, 0.15), labels = seq(-0.5, 0.6, 0.15)) +
   scale_x_continuous(limits = c(-0.5, 1), breaks = seq(-0.5, 1, 0.25), labels = seq(-0.5, 1, 0.25)) +
   theme_bw()
@@ -619,8 +626,30 @@ tiff(file.path(gpath, "Figure_2", paste("AllPolygons_YearFacets.tiff")), width =
 print(gg2)
 dev.off()
 
-```
+# Make a customized legend
+tmp_cols <- as.vector(unlist(cols))
+# tmp_cols
 
+# Get the legend across years
+gg_leg <- gtable::gtable_filter(ggplot_gtable(ggplot_build(
+  ggplot(ggpoly, aes(x = long, y = lat, color = id)) +
+    geom_line(linewidth = 3) +
+    scale_color_manual(values = tmp_cols) +
+    theme_bw() +
+    guides(color = guide_legend(title = "", nrow = 2, byrow = TRUE)) +
+    theme(legend.direction = "horizontal", legend.title = element_text(size = 12), legend.text = element_text(size = 10), legend.key.width = unit(1, "lines"), legend.justification = "left")
+)), "guide-box")
+
+# class(as.ggplot(gg_leg))
+# grid::grid.draw(gg_leg)
+# dev.off()
+
+# Save the legend in a separate file
+tiff(file.path(gpath, "call_type_year_leg_suppmat.tiff"), width = 6, height = 2, units = "in", res = 300)
+grid::grid.draw(gg_leg)
+dev.off()
+
+```
 
 #### Highest quality calls
 
@@ -1539,6 +1568,42 @@ glimpse(aci_rf_histReg_df)
 # make95PolyPlots_spatial(df = temp_rf_rs_df, polys = histgeo_rf_95polys, years = temporal_groups, group_col = "historical_region_year", pttrn = pttrn, dens = dens, pszs = pszs, fills = fills, path = gpath, img_file_nm = "Regional_AcousticPolygons_RF_subsampled.tiff", img_width = 7.4, img_height = 6)
 
 ```
+
+### Checking overlap in 2005 (Nicaragua?)
+
+Why is there more overlap in 2005? Remove calls assigned as Nicaragua to see if the overlap in that year was due to the presence of that call type. Running this check with SPCC similarity only. 
+
+```{r echo = TRUE, eval = FALSE}
+
+# Read back in the .csvs of randomly subsampled calls
+temp_spcc_rs_noNica <- read.csv(file.path(gpath, "random_sampling_SPCC_HistoricalRegions.csv")) %>%
+  dplyr::mutate(
+    historical_region_year = factor(historical_region_year)
+  ) %>% 
+  dplyr::filter(!grepl("^Nicaragua", Call_Type))
+
+glimpse(temp_spcc_rs_noNica)
+
+table(temp_spcc_rs_noNica$Call_Type)
+
+```
+
+```{r echo = TRUE, eval = FALSE}
+
+### SPCC
+
+histgeo_spcc_95polys_noNica <- get95polys(df = temp_spcc_rs_noNica, X_col = "X", Y_col = "Y", group_col = "historical_region_year")
+# str(histgeo_spcc_95polys_noNica)
+
+aci_spcc_histReg_noNica <- AcousticDriftIndex(polys = histgeo_spcc_95polys_noNica, comparisons_list = regional_comparisons, groups = temporal_groups, type = "spatial")
+
+glimpse(aci_spcc_histReg_noNica)
+
+# make95PolyPlots_spatial(df = temp_spcc_rs_noNica, polys = histgeo_spcc_95polys_noNica, years = temporal_groups, group_col = "historical_region_year", pttrn = pttrn, dens = dens, pszs = pszs, fills = fills, path = gpath, img_file_nm = "Regional_AcousticPolygons_SPCC_subsampled_noNica.tiff", img_width = 7.25, img_height = 3)
+
+```
+
+The graphic above confirms that there is less overlap between the North and South dialect regions in 2005 when the Nicaragua calls are removed, but some overlap remains. The acoustic drift index between these regions increases from 0.72 with the Nicaragua calls to 0.82 without the Nicaragua calls. The fact that there is still some overlap between these dialect regions in 2005 without the Nicaragua calls does point to structural changes within the North and South historical call types (since no bidialectal North + South dialect birds were recorded at any of these 10 sites).
 
 ### Call quality filter
 

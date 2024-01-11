@@ -234,7 +234,7 @@ make95PolyPlots_temporal <- function(df, comparisons_list, polys, groups, years,
       geom_line(linewidth = 3) +
       scale_color_manual(values = tmp_cols) +
       theme_bw() +
-      guides(color = guide_legend(title = "Call type & Year", ncol = 3, byrow = TRUE)) +
+      guides(color = guide_legend(title = "Call Type & Year", ncol = 3, byrow = TRUE)) +
       theme(legend.direction = "vertical", legend.title = element_text(size = 12), legend.text = element_text(size = 10), legend.key.width = unit(1, "lines"), legend.justification = "right")
   )), "guide-box")
   

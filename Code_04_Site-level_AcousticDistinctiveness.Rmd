@@ -32,7 +32,15 @@ path <- "/media/gsvidaurre/MYIOPSITTA/R/YNA_CulturalEvolutionAnalysis_2019"
 gpath <- "/home/gsvidaurre/Desktop/MANUSCRIPTS/Prep/YellowNapedAmazon_CulturalEvolution/GRAPHICS_RESULTS"
 
 # Selection table: each row is a call
-ccs_st <- read.csv(file.path(path, "AmazonVocalCulture_SelectionTableMetadata_31May2023.csv"))
+ccs_st <- read.csv(file.path(path, "AmazonVocalCulture_SelectionTableMetadata_31May2023.csv")) %>% 
+  # Change "Nica" to "Nicaragua" for remaking figures to be consistent with main manuscript terms
+  dplyr::mutate(
+    CallTypesVariants = gsub("Nica", "Nicaragua", CallTypesVariants)
+  )
+glimpse(ccs_st)
+
+# Replacement of call type label looks good
+table(ccs_st$CallTypesVariants)
 # glimpse(ccs_st)
 
 cores <- parallel::detectCores() - 2
@@ -61,14 +69,29 @@ mat_list <- list(xc_mat, rf_prox)
 Read in geographic coordinates of sites. Here, each row of the data frame is a unique site-year.
 ```{r echo = TRUE, eval = TRUE}
 
-site_year_meta <- read.csv(file.path(path, "AmazonVocalCulture_SiteLevelMetadata_31May2023.csv"))
+site_year_meta <- read.csv(file.path(path, "AmazonVocalCulture_SiteLevelMetadata_31May2023.csv")) %>% 
+  # Change "Nica" to "Nicaragua" for remaking figures to be consistent with main manuscript terms
+  dplyr::mutate(
+    Call_Type_1 = gsub("Nica", "Nicaragua", Call_Type_1),
+    Call_Type_2 = gsub("Nica", "Nicaragua", Call_Type_2),
+    Call_Type_3 = gsub("Nica", "Nicaragua", Call_Type_3),
+    Call_Type_4 = gsub("Nica", "Nicaragua", Call_Type_4)
+  )
+glimpse(site_year_meta)
+
+# Call type label replacement looks good
+table(site_year_meta$Call_Type_1)
+table(site_year_meta$Call_Type_2)
+table(site_year_meta$Call_Type_3)
+table(site_year_meta$Call_Type_4)
+
 glimpse(site_year_meta)
 
 ```
 
 # Calculate geographic distances among sites in each sampling year
 
-Per year, find the 3 nearest neighbors per site, as well as distances among the given site and these neighbors.
+Per year, find the 3 nearest neighbors per site, as well as distances among the given site and these neighbors. Note that the code below relies on a proj4 string through the sp package which is soon to deprecated in R.
 ```{r echo = TRUE, eval = TRUE}
 
 # Iterate over years
@@ -79,10 +102,10 @@ Per year, find the 3 nearest neighbors per site, as well as distances among the 
 # Using EPSG 5367 for Costa Rica
 epsg <- rgdal::make_EPSG()
 epsg[grep("^5367$", epsg$code), ]
-proj_string <- epsg$prj4[grep("^5367$", epsg$code)]
+epsg$prj4[grep("^5367$", epsg$code)
 
 # y <- 1
-# i <- 2
+# i <- 1
 dists_df <- data.table::rbindlist(invisible(pblapply(1:length(yrs), function(y){
   
   # Per year, get the geographic coordinates and reproject
@@ -109,7 +132,7 @@ dists_df <- data.table::rbindlist(invisible(pblapply(1:length(yrs), function(y){
   sp_pts <- SpatialPoints(mat, proj4string = CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
 
   # Reproject geographic coordinates using a Costa Rica coordinate system
-  sp_pts <- sp::spTransform(sp_pts, CRSobj = CRS(proj_string))
+  sp_pts <- sp::spTransform(sp_pts, CRSobj = CRS("EPSG:5367"))
   # proj4string(sp_pts) # Checking, looks good
   
   # Calculate pairwise distances among sites in the given year
@@ -160,6 +183,11 @@ dists_df <- data.table::rbindlist(invisible(pblapply(1:length(yrs), function(y){
 })))
 
 glimpse(dists_df)
+
+
+# Write out this data
+dists_df %>% 
+  write.csv(file.path(gpath, "Pairwise_geographic_distance_sites_11Jan2024.csv"), row.names = FALSE)
 
 ```
 
@@ -214,6 +242,12 @@ dists_df %>%
     sd_dist = round(sd(distance_km), 2)
   ) %>%
   kable()
+
+# |historical_region                     | mean_dist| sd_dist|
+# |:-------------------------------------|---------:|-------:|
+# |Historic North/South dialect boundary |     49.99|   34.10|
+# |Historic northern region              |     60.92|   47.10|
+# |Historic southern region              |     85.86|   44.43|
 
 ```
 
@@ -549,11 +583,11 @@ obs_nn_df %>%
   scale_y_continuous(limits = c(-0.1, 0.4)) +
   theme_bw() +
   xlab("Mean nearest neighbor distance (km)") +
-  ylab("Site-level\n acoustic distinctiveness") +
+  ylab("Acoustic distinctiveness") +
   theme(
-    axis.title = element_text(size = 9),
-    axis.text = element_text(size = 8),
-    strip.text = element_text(size = 9),
+    axis.title = element_text(size = 8),
+    axis.text = element_text(size = 7),
+    strip.text = element_text(size = 8),
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank()
   )
@@ -580,11 +614,11 @@ obs_nn_df %>%
   scale_y_continuous(limits = c(-0.1, 0.4)) +
   theme_bw() +
   xlab("Mean nearest neighbor distance (km)") +
-  ylab("Mean difference in\n acoustic similarity") +
+  ylab("Acoustic distinctiveness") +
   theme(
-    axis.title = element_text(size = 9),
-    axis.text = element_text(size = 8),
-    strip.text = element_text(size = 9),
+    axis.title = element_text(size = 8),
+    axis.text = element_text(size = 7),
+    strip.text = element_text(size = 8),
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank()
   )
@@ -841,7 +875,7 @@ obs_roost_counts %>%
     panel.grid.minor = element_blank()
   )
   
-ggsave(file.path(gpath, "RoostCount_Permutation_SPCC.tiff"), unit = "in", width = 3.75, height = 2, dpi = 300)
+# ggsave(file.path(gpath, "RoostCount_Permutation_SPCC.tiff"), unit = "in", width = 3.75, height = 2, dpi = 300)
 
 ### Random forests
 obs_roost_counts %>%
@@ -872,6 +906,6 @@ obs_roost_counts %>%
     panel.grid.minor = element_blank()
   )
   
-ggsave(file.path(gpath, "RoostCount_Permutation_RF.tiff"), unit = "in", width = 3.75, height = 2, dpi = 300)
+# ggsave(file.path(gpath, "RoostCount_Permutation_RF.tiff"), unit = "in", width = 3.75, height = 2, dpi = 300)
 
 ```
