@@ -9,7 +9,7 @@
 
 # More info: Groups can be regions or years. The comparisons list should have a vector of categories that will be compared to each other in each group (e.g. two regions compared in each year, or two years compared for each call type) 
 
-AcousticDistinctivenessIndex <- function(polys, comparisons_list, groups, type){
+AcousticDriftIndex <- function(polys, comparisons_list, groups, type){
   
   # Iterate over groups to calculate overlap among polygons for categories in each comparison
   aci_df <- rbindlist(pblapply(1:length(groups), function(x){
@@ -70,10 +70,10 @@ AcousticDistinctivenessIndex <- function(polys, comparisons_list, groups, type){
       # Merge these calculations together to get the total area across both polygons (without double-counting the intersection area)
       comb_area <- ni_area_curr + ni_area_next + intersect_area
       
-      # A symmetric index of acoustic overlap (e.g. this index will be the same regardless of which polygon is used as the baseline). When a polygon is compared to itself, then this index is 0. When the intersection area is 0, meaning that there is no overlap between the polygons, then this index goes to 1. So values closer to 0 mean more overlap in acoustic space, and values closer to 1 mean more distinctiveness in acoustic space
+      # A symmetric index of acoustic overlap (e.g. this index will be the same regardless of which polygon is used as the baseline). When a polygon is compared to itself, then this index is 0. When the intersection area is 0, meaning that there is no overlap between the polygons, then this index goes to 1. So values closer to 0 mean more overlap in acoustic space, and values closer to 1 mean more drift in acoustic space
       aci <- round((comb_area - intersect_area) / comb_area, 2)
 
-      ovlp_df <- data.frame(group = groups[x], category_1 = comp_tmp[y, "Var1"], category_2 = comp_tmp[y, "Var2"], acoustic_distinctiveness = aci)
+      ovlp_df <- data.frame(group = groups[x], category_1 = comp_tmp[y, "Var1"], category_2 = comp_tmp[y, "Var2"], acoustic_drift = aci)
       
       return(ovlp_df)
       

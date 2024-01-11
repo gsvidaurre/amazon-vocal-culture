@@ -12,8 +12,8 @@
 # years: The years of interest. This argument should be a named list of lists, such that each element is in order by group, and each element of the list contains the years that you want to compare per group. The names of the list should be the groups, otherwise the function will fail. The minimum length per element should be 2 (e.g. compare the given group one year to another)
 
 # cols: A list of lists by groups, in which each nested list is a vector of colors, and each element corresponds to a different year per group
-# North, South, Nica
-# 1994, 2005, 2016 for North and South; 1994 and 2005 for Nica
+# North, South, Nicaragua
+# 1994, 2005, 2016 for North and South; 1994 and 2005 for Nicaragua
 
 # group_col: The name of the column in the object df with groups of interest, so as to return a separate polygon per group. This column must be a factor for the function to run
 
@@ -82,7 +82,7 @@ make95PolyPlots_temporal <- function(df, comparisons_list, polys, groups, years,
       comp_tmp <- comp_tmp %>% 
         dplyr::filter(Vars %in% c("1994-2005", "2005-2016", "2016-1994"))
       
-    } else if(groups[x] == "Nica"){
+    } else if(groups[x] == "Nicaragua"){
       
       comp_tmp <- comp_tmp %>% 
         dplyr::filter(Vars == "1994-2005")
@@ -125,14 +125,14 @@ make95PolyPlots_temporal <- function(df, comparisons_list, polys, groups, years,
       if(figure_type == "composite"){
         
         # Coordinates and settings for axis limits
-        min_x <- round(min(ggpoly_tmp$long), 2)
-        max_x <- round(max(ggpoly_tmp$long), 2)
+        min_x <- round(min(ggpoly$long), 2) # previously ggpoly_tmp was used to set this limit and those below
+        max_x <- round(max(ggpoly$long), 2)
         bufx <- max_x/5
         breaks_x <- round(seq(min_x - bufx, max_x + bufx, (max_x + bufx)/4), 2)
         # breaks_x
         
-        min_y <- round(min(ggpoly_tmp$lat), 2)
-        max_y <- round(max(ggpoly_tmp$lat), 2)
+        min_y <- round(min(ggpoly$lat), 2)
+        max_y <- round(max(ggpoly$lat), 2)
         bufy <- max_y/5
         breaks_y <- round(seq(min_y - bufy, max_y + bufy, (max_y + bufy)/4), 2)
         # breaks_y
@@ -140,16 +140,16 @@ make95PolyPlots_temporal <- function(df, comparisons_list, polys, groups, years,
       } else if(figure_type == "separate") {
         
         # Coordinates and settings for axis limits
-        min_x <- round(min(ggpoly_tmp$long), 2)
-        max_x <- round(max(ggpoly_tmp$long), 2)
+        min_x <- round(min(ggpoly$long), 2) # previously ggpoly_tmp was used to set this limit and those below
+        max_x <- round(max(ggpoly$long), 2)
         bufx <- round(max_x/5, 2)
-        breaks_x <-  round(seq(round(min_x - bufx, 2), round(max_x + bufx, 2), round((max_x + bufx)/3, 2)), 2)
+        breaks_x <- round(seq(round(min_x - bufx, 2), round(max_x + bufx, 2), round((max_x + bufx)/3, 2)), 2)
         # breaks_x
         
-        min_y <- round(min(ggpoly_tmp$lat), 2)
-        max_y <- round(max(ggpoly_tmp$lat), 2)
+        min_y <- round(min(ggpoly$lat), 2)
+        max_y <- round(max(ggpoly$lat), 2)
         bufy <- round(max_y/5, 2)
-        breaks_y <-  round(seq(round(min_y - bufy, 2), round(max_y + bufy, 2), round((max_y + bufy)/3, 2)), 2)
+        breaks_y <- round(seq(round(min_y - bufy/2, 2), round(max_y + bufy, 2), round((max_y + bufy)/3, 2)), 2)
         # breaks_y
         
       }
@@ -214,8 +214,8 @@ make95PolyPlots_temporal <- function(df, comparisons_list, polys, groups, years,
   # Make a fake data frame for a customized legend. This is not very generalized
   levs <- paste(rep(unlist(groups), each = length(yrs)), yrs, sep = " - ")
   
-  if(("Nica" %in% groups) & ("2016" %in% yrs)){
-    levs <- levs[-grep("Nica - 2016", levs)]
+  if(("Nicaragua" %in% groups) & ("2016" %in% yrs)){
+    levs <- levs[-grep("Nicaragua - 2016", levs)]
     # levs
   }
   
