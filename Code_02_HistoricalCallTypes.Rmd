@@ -593,8 +593,8 @@ gg1 <- ggplot(data = ggpoly, aes(x = long, y = lat, group = group)) +
                  dplyr::filter(id == "South_2016") %>%
                  droplevels(), color = cols[[2]][[3]], fill = cols[[2]][[3]]) +
   
-  xlab("") +
-  ylab("") +
+  xlab("MDS Dimension 1") +
+  ylab("MDS Dimension 2") +
   scale_y_continuous(limits = c(-0.5, 0.6), breaks = seq(-0.5, 0.6, 0.15), labels = seq(-0.5, 0.6, 0.15)) +
   scale_x_continuous(limits = c(-0.5, 1), breaks = seq(-0.5, 1, 0.25), labels = seq(-0.5, 1, 0.25)) +
   theme_bw()
@@ -616,13 +616,11 @@ gg1 <- gg1 +
 gg2 <- gg1 +
     facet_grid(~ year, switch = "y")
 
-# img_width = 2.35, img_height = 1.75
-
-tiff(file.path(gpath, "Figure_2", paste("AllPolygons_NoFacets.tiff")), width = 4, height = 3, units = "in", res = 300)
+tiff(file.path(gpath, paste("CallTypes_AcousticPolygons_NoFacets.tiff")), width = 4, height = 3, units = "in", res = 300)
 print(gg1)
 dev.off()
 
-tiff(file.path(gpath, "Figure_2", paste("AllPolygons_YearFacets.tiff")), width = 6, height = 3, units = "in", res = 300)
+tiff(file.path(gpath, paste("CallTypes_AcousticPolygons_YearFacets.tiff")), width = 6, height = 3, units = "in", res = 300)
 print(gg2)
 dev.off()
 
@@ -636,8 +634,8 @@ gg_leg <- gtable::gtable_filter(ggplot_gtable(ggplot_build(
     geom_line(linewidth = 3) +
     scale_color_manual(values = tmp_cols) +
     theme_bw() +
-    guides(color = guide_legend(title = "", nrow = 2, byrow = TRUE)) +
-    theme(legend.direction = "horizontal", legend.title = element_text(size = 12), legend.text = element_text(size = 10), legend.key.width = unit(1, "lines"), legend.justification = "left")
+    guides(color = guide_legend(title = "Call Type & Year", nrow = 2, byrow = TRUE)) +
+    theme(legend.direction = "horizontal", legend.title = element_text(size = 9), legend.text = element_text(size = 8), legend.key.width = unit(1, "lines"), legend.justification = "left")
 )), "guide-box")
 
 # class(as.ggplot(gg_leg))
@@ -645,8 +643,15 @@ gg_leg <- gtable::gtable_filter(ggplot_gtable(ggplot_build(
 # dev.off()
 
 # Save the legend in a separate file
-tiff(file.path(gpath, "call_type_year_leg_suppmat.tiff"), width = 6, height = 2, units = "in", res = 300)
-grid::grid.draw(gg_leg)
+# tiff(file.path(gpath, "call_type_year_leg_suppmat.tiff"), width = 6, height = 2, units = "in", res = 300)
+# # grid::grid.draw(gg_leg)
+# dev.off()
+
+# Save the faceted plot and legend together in a single image file
+tiff(file.path(gpath, "FigureS1.tiff"), width = 6, height = 3, units = "in", res = 300)
+ggarrange(
+  as.ggplot(gg_leg), gg2, heights = c(1, 2)
+)
 dev.off()
 
 ```
@@ -2143,7 +2148,7 @@ gg2 <- ggplot(data = gg_df, aes(x = new_site_code, y = Call_Type)) +
     axis.text.y = element_text(size = 9),
     axis.text.x = element_text(size = 9, angle = 40, vjust = 1, hjust = 1),
     axis.ticks = element_line(linewidth = 0.5),
-    strip.text = element_text(size = 10, margin = ggplot2::margin(0.25, 0, 0.25, 0, "line"), face = "bold"), 
+    strip.text = element_text(size = 10, margin = ggplot2::margin(0.25, 0, 0.25, 0, "line")), 
     axis.title = element_text(size = 10), 
     plot.margin = unit(rep(0.5, 4), "line")
   )

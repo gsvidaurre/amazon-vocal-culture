@@ -378,7 +378,7 @@ make95PolyPlots_spatial <- function(df, polys, years, cols, group_col, pttrn = c
     theme(
       axis.text.y = element_text(size = 10), 
       axis.text.x = element_text(size = 9.5), 
-      strip.text = element_text(size = 12, margin = ggplot2::margin(0.25, 0, 0.25, 0, "line"), face = "bold"), 
+      strip.text = element_text(size = 12, margin = ggplot2::margin(0.25, 0, 0.25, 0, "line")), 
       axis.title = element_text(size = 12), 
       plot.margin = unit(rep(0.25, 4), "line"),
       panel.grid.major = element_blank(),
